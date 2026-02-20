@@ -1,11 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#F5F5F5"
-    tools:context=".MainActivity">
+    android:background="#F5F5F5">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -14,24 +12,32 @@
         android:padding="32dp"
         android:gravity="center">
 
-        <!-- Logo o Título -->
+        <!-- Título -->
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="VAPAJOMI"
-            android:textSize="48sp"
+            android:text="Crear Cuenta"
+            android:textSize="36sp"
             android:textStyle="bold"
             android:textColor="#02B126"
-            android:layout_marginTop="60dp"
-            android:layout_marginBottom="16dp"/>
+            android:layout_marginTop="40dp"
+            android:layout_marginBottom="40dp"/>
 
-        <TextView
-            android:layout_width="wrap_content"
+        <!-- Campo de Nombre -->
+        <com.google.android.material.textfield.TextInputLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Asistente de Voz"
-            android:textSize="18sp"
-            android:textColor="#757575"
-            android:layout_marginBottom="60dp"/>
+            android:hint="Nombre Completo"
+            app:startIconDrawable="@android:drawable/ic_menu_myplaces"
+            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
+            android:layout_marginBottom="16dp">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/nameEditText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="textPersonName"/>
+        </com.google.android.material.textfield.TextInputLayout>
 
         <!-- Campo de Email -->
         <com.google.android.material.textfield.TextInputLayout
@@ -57,7 +63,7 @@
             app:startIconDrawable="@android:drawable/ic_lock_idle_lock"
             app:endIconMode="password_toggle"
             style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
-            android:layout_marginBottom="24dp">
+            android:layout_marginBottom="16dp">
 
             <com.google.android.material.textfield.TextInputEditText
                 android:id="@+id/passwordEditText"
@@ -66,16 +72,22 @@
                 android:inputType="textPassword"/>
         </com.google.android.material.textfield.TextInputLayout>
 
-        <!-- Botón de Iniciar Sesión -->
-        <Button
-            android:id="@+id/loginButton"
+        <!-- Campo de Confirmar Contraseña -->
+        <com.google.android.material.textfield.TextInputLayout
             android:layout_width="match_parent"
-            android:layout_height="60dp"
-            android:text="Iniciar Sesión"
-            android:textSize="16sp"
-            android:textStyle="bold"
-            android:backgroundTint="#02B126"
-            android:layout_marginBottom="16dp"/>
+            android:layout_height="wrap_content"
+            android:hint="Confirmar Contraseña"
+            app:startIconDrawable="@android:drawable/ic_lock_idle_lock"
+            app:endIconMode="password_toggle"
+            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
+            android:layout_marginBottom="24dp">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/confirmPasswordEditText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="textPassword"/>
+        </com.google.android.material.textfield.TextInputLayout>
 
         <!-- Botón de Registrarse -->
         <Button
@@ -85,7 +97,17 @@
             android:text="Registrarse"
             android:textSize="16sp"
             android:textStyle="bold"
-            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            android:backgroundTint="#02B126"
+            android:layout_marginBottom="16dp"/>
+
+        <!-- Botón de Volver al Login -->
+        <Button
+            android:id="@+id/backToLoginButton"
+            android:layout_width="match_parent"
+            android:layout_height="60dp"
+            android:text="Ya tengo cuenta"
+            android:textSize="16sp"
+            style="@style/Widget.MaterialComponents.Button.TextButton"
             android:textColor="#02B126"/>
 
     </LinearLayout>
