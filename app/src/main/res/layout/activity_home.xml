@@ -1,38 +1,58 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:padding="32dp"
+    android:background="#F5F5F5"
     android:gravity="center"
-    android:background="#F5F5F5">
+    android:orientation="vertical"
+    android:padding="32dp">
 
     <TextView
         android:id="@+id/welcomeText"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:layout_marginBottom="40dp"
         android:text="Bienvenido"
-        android:textSize="32sp"
-        android:textStyle="bold"
         android:textColor="#02B126"
-        android:layout_marginBottom="40dp"/>
+        android:textSize="32sp"
+        android:textStyle="bold" />
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="¿En qué puedo ayudarte?"
-        android:textSize="20sp"
+        android:layout_marginBottom="24dp"
+        android:text="En que puedo ayudarte?"
         android:textColor="#757575"
-        android:layout_marginBottom="60dp"/>
+        android:textSize="20sp" />
+
+    <Button
+        android:id="@+id/listenButton"
+        style="@style/Widget.MaterialComponents.Button"
+        android:layout_width="match_parent"
+        android:layout_height="60dp"
+        android:layout_marginBottom="16dp"
+        android:text="Escuchar voz"
+        android:textSize="16sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/voiceResultText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="36dp"
+        android:gravity="center"
+        android:text="Pulsa Escuchar voz para comenzar"
+        android:textColor="#333333"
+        android:textSize="16sp" />
 
     <Button
         android:id="@+id/logoutButton"
+        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
         android:layout_width="match_parent"
         android:layout_height="60dp"
-        android:text="Cerrar Sesión"
+        android:text="Cerrar sesion"
+        android:textColor="#02B126"
         android:textSize="16sp"
-        android:textStyle="bold"
-        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-        android:textColor="#02B126"/>
+        android:textStyle="bold" />
 
 </LinearLayout>

@@ -1,9 +1,11 @@
-package com.vapajomi.vapajomi
+﻿package com.vapajomi.vapajomi
 
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.widget.Button
 import android.widget.TextView
@@ -17,21 +19,23 @@ import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ValueEventListener
-import java.util.*
+import java.util.Locale
 
 class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private lateinit var mAuth: FirebaseAuth
     private lateinit var database: FirebaseDatabase
     private lateinit var tts: TextToSpeech
+    private lateinit var voiceCommandListener: VoiceCommandListener
 
     private lateinit var welcomeText: TextView
+    private lateinit var voiceResultText: TextView
+    private lateinit var listenButton: Button
     private lateinit var logoutButton: Button
 
-    private val PERMISSIONS_REQUEST_CODE = 100
+    private val permissionsRequestCode = 100
 
-    // Lista de todos los permisos necesarios
-    private val REQUIRED_PERMISSIONS = arrayOf(
+    private val requiredPermissions = arrayOf(
         Manifest.permission.RECORD_AUDIO,
         Manifest.permission.CAMERA,
         Manifest.permission.READ_CONTACTS,
@@ -45,26 +49,41 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_home)
 
-        // Inicializar Firebase
         mAuth = FirebaseAuth.getInstance()
         database = FirebaseDatabase.getInstance()
-
-        // Inicializar Text-to-Speech
         tts = TextToSpeech(this, this)
 
-        // Conectar vistas
         welcomeText = findViewById(R.id.welcomeText)
+        voiceResultText = findViewById(R.id.voiceResultText)
+        listenButton = findViewById(R.id.listenButton)
         logoutButton = findViewById(R.id.logoutButton)
 
-        // Obtener nombre del usuario
+        voiceCommandListener = VoiceCommandListener(
+            context = this,
+            onResult = { text ->
+                runOnUiThread {
+                    voiceResultText.text = "Escuche: $text"
+                    speak("Escuche: $text")
+                }
+            },
+            onError = { message ->
+                runOnUiThread {
+                    voiceResultText.text = message
+                    Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+                }
+            }
+        )
+
         loadUserName()
 
-        // Configurar botón de cerrar sesión
+        listenButton.setOnClickListener {
+            startVoiceListening()
+        }
+
         logoutButton.setOnClickListener {
             logout()
         }
 
-        // Pedir permisos
         checkAndRequestPermissions()
     }
 
@@ -80,7 +99,6 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                             welcomeText.text = "Bienvenido, $name"
                             speak("Bienvenido $name")
                         } else {
-                            val email = mAuth.currentUser?.email
                             welcomeText.text = "Bienvenido"
                             speak("Bienvenido")
                         }
@@ -94,40 +112,56 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
 
+    private fun startVoiceListening() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.RECORD_AUDIO),
+                permissionsRequestCode
+            )
+            return
+        }
+
+        voiceResultText.text = "Escuchando..."
+        voiceCommandListener.startListening()
+    }
+
     private fun checkAndRequestPermissions() {
         val permissionsToRequest = mutableListOf<String>()
 
-        for (permission in REQUIRED_PERMISSIONS) {
-            if (ContextCompat.checkSelfPermission(this, permission)
-                != PackageManager.PERMISSION_GRANTED) {
+        for (permission in requiredPermissions) {
+            if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
                 permissionsToRequest.add(permission)
             }
         }
 
         if (permissionsToRequest.isNotEmpty()) {
-            // Explicar por qué necesitamos los permisos
             AlertDialog.Builder(this)
-                .setTitle("Permisos Necesarios")
-                .setMessage("VAPAJOMI necesita acceso a:\n\n" +
-                        "• Micrófono: Para comandos de voz\n" +
-                        "• Cámara: Para detectar obstáculos\n" +
-                        "• Contactos: Para hacer llamadas\n" +
-                        "• Teléfono: Para realizar llamadas\n" +
-                        "• SMS: Para enviar mensajes\n" +
-                        "• Ubicación: Para navegación")
+                .setTitle("Permisos necesarios")
+                .setMessage(
+                    "VAPAJOMI necesita acceso a:\n\n" +
+                        "- Microfono: para comandos de voz\n" +
+                        "- Camara: para detectar obstaculos\n" +
+                        "- Contactos: para hacer llamadas\n" +
+                        "- Telefono: para realizar llamadas\n" +
+                        "- SMS: para enviar mensajes\n" +
+                        "- Ubicacion: para navegacion"
+                )
                 .setPositiveButton("Aceptar") { _, _ ->
                     ActivityCompat.requestPermissions(
                         this,
                         permissionsToRequest.toTypedArray(),
-                        PERMISSIONS_REQUEST_CODE
+                        permissionsRequestCode
                     )
                 }
                 .setNegativeButton("Cancelar") { _, _ ->
-                    speak("Los permisos son necesarios para el funcionamiento de la aplicación")
+                    speak("Los permisos son necesarios para el funcionamiento de la aplicacion")
                 }
                 .show()
         } else {
-            speak("Todos los permisos están activos. ¿En qué puedo ayudarte?")
+            speak("Todos los permisos estan activos. En que puedo ayudarte?")
         }
     }
 
@@ -138,35 +172,31 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
 
-        if (requestCode == PERMISSIONS_REQUEST_CODE) {
-            val allGranted = grantResults.all { it == PackageManager.PERMISSION_GRANTED }
+        if (requestCode == permissionsRequestCode) {
+            val allGranted = grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }
 
             if (allGranted) {
                 speak("Permisos concedidos. Estoy listo para ayudarte")
             } else {
-                speak("Algunos permisos fueron denegados. Algunas funciones podrían no estar disponibles")
+                speak("Algunos permisos fueron denegados. Algunas funciones podrian no estar disponibles")
             }
         }
     }
 
     private fun logout() {
-        speak("Cerrando sesión")
+        speak("Cerrando sesion")
 
-        // Esperar a que termine de hablar antes de cerrar sesión
-        android.os.Handler().postDelayed({
+        Handler(Looper.getMainLooper()).postDelayed({
             mAuth.signOut()
             startActivity(Intent(this, MainActivity::class.java))
             finish()
         }, 1500)
     }
 
-    // Text-to-Speech
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
             val result = tts.setLanguage(Locale("es", "ES"))
-
-            if (result == TextToSpeech.LANG_MISSING_DATA ||
-                result == TextToSpeech.LANG_NOT_SUPPORTED) {
+            if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
                 Toast.makeText(this, "Idioma no soportado", Toast.LENGTH_SHORT).show()
             }
         }
@@ -177,10 +207,13 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     override fun onDestroy() {
+        voiceCommandListener.destroy()
+
         if (::tts.isInitialized) {
             tts.stop()
             tts.shutdown()
         }
+
         super.onDestroy()
     }
 }
