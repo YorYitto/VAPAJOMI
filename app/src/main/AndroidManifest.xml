@@ -27,11 +27,11 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
-    <!-- Permisos de Ubicación (para Google Maps) -->
+    <!-- Permisos de Ubicación -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
-    <!-- Permisos de Vibración (para feedback) -->
+    <!-- Permisos de Vibración -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
     <application
@@ -59,7 +59,21 @@
             android:exported="false" />
 
         <activity
+            android:name=".DisabilitySelectionActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".HomeActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
+        <activity
+            android:name=".ObjectDetectionActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
+        <activity
+            android:name=".VoiceProfileTrainingActivity"
             android:exported="false"
             android:screenOrientation="portrait" />
 

@@ -2,15 +2,14 @@
 
 import android.Manifest
 import android.content.ActivityNotFoundException
-import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.hardware.camera2.CameraAccessException
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.location.Address
+import android.location.Geocoder
 import android.location.Location
-import android.location.LocationManager
 import android.media.AudioManager
 import android.net.Uri
 import android.os.BatteryManager
@@ -23,22 +22,22 @@ import android.provider.MediaStore
 import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.telephony.SmsManager
+import android.view.View
 import android.widget.Button
 import android.widget.TextView
-import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import com.google.android.gms.location.*
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ValueEventListener
-import java.time.LocalDateTime
-import java.time.format.DateTimeFormatter
 import java.text.Normalizer
-import java.util.Locale
+import java.text.SimpleDateFormat
+import java.util.*
 
 class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
@@ -46,16 +45,23 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private lateinit var database: FirebaseDatabase
     private lateinit var tts: TextToSpeech
     private lateinit var voiceCommandListener: VoiceCommandListener
+    private lateinit var fusedLocationClient: FusedLocationProviderClient
+    private lateinit var locationCallback: LocationCallback
 
     private lateinit var welcomeText: TextView
     private lateinit var voiceResultText: TextView
-    private lateinit var listenButton: Button
+    private lateinit var statusText: TextView
+    private lateinit var helpButton: Button
     private lateinit var logoutButton: Button
     private lateinit var cameraManager: CameraManager
     private lateinit var audioManager: AudioManager
+
     private var torchCameraId: String? = null
     private var isTorchEnabled = false
-    private val spanishLocale: Locale = Locale.forLanguageTag("es-ES")
+    private var isListening = false
+    private var currentLocation: Location? = null
+    private var currentAddress: String = ""
+    private val spanishLocale: Locale = Locale("es", "CO")
 
     private val permissionsRequestCode = 100
 
@@ -63,8 +69,11 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         Manifest.permission.RECORD_AUDIO,
         Manifest.permission.CAMERA,
         Manifest.permission.READ_CONTACTS,
+        Manifest.permission.WRITE_CONTACTS,
         Manifest.permission.CALL_PHONE,
+        Manifest.permission.READ_PHONE_STATE,
         Manifest.permission.SEND_SMS,
+        Manifest.permission.READ_SMS,
         Manifest.permission.ACCESS_FINE_LOCATION,
         Manifest.permission.ACCESS_COARSE_LOCATION
     )
@@ -77,33 +86,39 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         database = FirebaseDatabase.getInstance()
         tts = TextToSpeech(this, this)
         audioManager = getSystemService(AudioManager::class.java)
+        fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
 
         welcomeText = findViewById(R.id.welcomeText)
         voiceResultText = findViewById(R.id.voiceResultText)
-        listenButton = findViewById(R.id.listenButton)
+        statusText = findViewById(R.id.statusText)
+        helpButton = findViewById(R.id.helpButton)
         logoutButton = findViewById(R.id.logoutButton)
+
+        // OCULTAR el texto "Escuché: ..."
+        voiceResultText.visibility = View.GONE
 
         voiceCommandListener = VoiceCommandListener(
             context = this,
             onResult = { text ->
                 runOnUiThread {
-                    voiceResultText.text = "Escuche: $text"
+                    // NO mostrar en pantalla
+                    // voiceResultText.text = "Escuché: $text"
                     handleVoiceCommand(text)
                 }
             },
-            onError = { message ->
+            onError = { _ ->
                 runOnUiThread {
-                    voiceResultText.text = message
-                    Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+                    restartListening()
                 }
             }
         )
 
-        loadUserName()
+        setupLocationCallback()
+        loadUserProfile()
         initTorch()
 
-        listenButton.setOnClickListener {
-            startVoiceListening()
+        helpButton.setOnClickListener {
+            showCommandsList()
         }
 
         logoutButton.setOnClickListener {
@@ -113,50 +128,120 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         checkAndRequestPermissions()
     }
 
-    private fun loadUserName() {
-        val userId = mAuth.currentUser?.uid
-
-        userId?.let {
-            database.reference.child("users").child(it)
-                .addListenerForSingleValueEvent(object : ValueEventListener {
-                    override fun onDataChange(snapshot: DataSnapshot) {
-                        val name = snapshot.child("name").getValue(String::class.java)
-                        if (name != null) {
-                            welcomeText.text = "Bienvenido, $name"
-                            speak("Bienvenido $name")
-                        } else {
-                            welcomeText.text = "Bienvenido"
-                            speak("Bienvenido")
-                        }
-                    }
-
-                    override fun onCancelled(error: DatabaseError) {
-                        welcomeText.text = "Bienvenido"
-                        speak("Bienvenido")
-                    }
-                })
+    private fun setupLocationCallback() {
+        locationCallback = object : LocationCallback() {
+            override fun onLocationResult(locationResult: LocationResult) {
+                locationResult.lastLocation?.let { location ->
+                    currentLocation = location
+                    updateAddress(location)
+                }
+            }
         }
     }
 
-    private fun startVoiceListening() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
-            ActivityCompat.requestPermissions(
-                this,
-                arrayOf(Manifest.permission.RECORD_AUDIO),
-                permissionsRequestCode
-            )
+    private fun startLocationUpdates() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) !=
+            PackageManager.PERMISSION_GRANTED) {
             return
         }
 
-        voiceResultText.text = "Escuchando..."
-        voiceCommandListener.startListening()
+        val locationRequest = LocationRequest.Builder(
+            Priority.PRIORITY_HIGH_ACCURACY,
+            5000
+        ).build()
+
+        fusedLocationClient.requestLocationUpdates(
+            locationRequest,
+            locationCallback,
+            Looper.getMainLooper()
+        )
+    }
+
+    private fun updateAddress(location: Location) {
+        try {
+            val geocoder = Geocoder(this, spanishLocale)
+            @Suppress("DEPRECATION")
+            val addresses: List<Address>? = geocoder.getFromLocation(
+                location.latitude,
+                location.longitude,
+                1
+            )
+
+            if (!addresses.isNullOrEmpty()) {
+                val address = addresses[0]
+                val parts = mutableListOf<String>()
+
+                address.thoroughfare?.let { parts.add(it) }
+                address.subThoroughfare?.let { parts.add("#$it") }
+                address.subLocality?.let { parts.add(it) }
+                address.locality?.let { parts.add(it) }
+
+                currentAddress = parts.joinToString(", ")
+            }
+        } catch (_: Exception) {
+            currentAddress = "Ubicación desconocida"
+        }
+    }
+
+    private fun loadUserProfile() {
+        val userId = mAuth.currentUser?.uid ?: return
+
+        database.reference.child("users").child(userId)
+            .addListenerForSingleValueEvent(object : ValueEventListener {
+                override fun onDataChange(snapshot: DataSnapshot) {
+                    val disabilityType = snapshot.child("disabilityType").getValue(String::class.java)
+
+                    welcomeText.text = "Bienvenido"
+                    applyDisabilityAdaptations(disabilityType)
+
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        startContinuousListening()
+                        startLocationUpdates()
+                    }, 1000)
+                }
+
+                override fun onCancelled(error: DatabaseError) {
+                    welcomeText.text = "Bienvenido"
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        startContinuousListening()
+                        startLocationUpdates()
+                    }, 1000)
+                }
+            })
+    }
+
+    private fun applyDisabilityAdaptations(disabilityType: String?) {
+        when (disabilityType) {
+            "visual_total" -> {
+                welcomeText.textSize = 36f
+                statusText.textSize = 20f
+            }
+            "visual_parcial" -> {
+                welcomeText.textSize = 32f
+                statusText.textSize = 18f
+            }
+        }
+    }
+
+    private fun startContinuousListening() {
+        if (!isListening && ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED) {
+            isListening = true
+            statusText.text = "🎤 Escuchando..."
+            voiceCommandListener.startListening()
+        }
+    }
+
+    private fun restartListening() {
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (isListening) {
+                voiceCommandListener.startListening()
+            }
+        }, 500)
     }
 
     private fun initTorch() {
         cameraManager = getSystemService(CameraManager::class.java)
-
         torchCameraId = cameraManager.cameraIdList.firstOrNull { cameraId ->
             val characteristics = cameraManager.getCameraCharacteristics(cameraId)
             characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
@@ -165,102 +250,253 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private fun handleVoiceCommand(rawCommand: String) {
         val command = normalizeCommand(rawCommand)
-        val smsCommand = parseSmsCommand(command)
-        val callTarget = extractCommandTarget(command, listOf("llamar a ", "llama a "))
-        val navigationTarget = extractCommandTarget(command, listOf("navegar a ", "llevame a ", "ir a "))
+
+        // PALABRA DE ACTIVACIÓN: "OK ASISTENTE" o "HOLA ASISTENTE"
+        val hasActivation = command.contains("ok asistente") ||
+                command.contains("hola asistente") ||
+                command.contains("okey asistente")
+
+        if (!hasActivation && !isCommandRecognized(command)) {
+            restartListening()
+            return
+        }
+
+        val cleanCommand = command
+            .replace("ok asistente", "")
+            .replace("hola asistente", "")
+            .replace("okey asistente", "")
+            .trim()
+
+        val smsCommand = parseSmsCommand(cleanCommand)
+        val callTarget = extractCallTarget(cleanCommand)
+        val navigationTarget = extractNavigationTarget(cleanCommand)
 
         when {
-            command == "ayuda" || command.contains("que puedes hacer") || command.contains("comandos") -> {
-                speakAvailableCommands()
-            }
-
-            command.contains("enciende la linterna") ||
-                command.contains("prende la linterna") ||
-                (command.contains("enciende") && command.contains("linterna")) ||
-                (command.contains("prende") && command.contains("linterna")) -> {
-                setFlashlight(true)
-            }
-
-            command.contains("apaga la linterna") ||
-                (command.contains("apaga") && command.contains("linterna")) -> {
-                setFlashlight(false)
-            }
-
-            command.contains("que hora es") || command.contains("dime la hora") || command == "hora" -> {
-                speakCurrentTime()
-            }
-
-            command.contains("que fecha es") || command.contains("dime la fecha") || command == "fecha" -> {
-                speakCurrentDate()
-            }
-
-            command.contains("nivel de bateria") || command.contains("cuanta bateria tengo") -> {
-                speakBatteryLevel()
-            }
-
-            command.contains("sube volumen") || command.contains("aumenta volumen") -> {
-                changeVolume(up = true)
-            }
-
-            command.contains("baja volumen") || command.contains("disminuye volumen") -> {
-                changeVolume(up = false)
-            }
-
-            command.contains("silencio") || command.contains("mute") -> {
-                muteVolume()
-            }
-
-            command.contains("abrir camara") -> {
-                openCamera()
-            }
-
-            command.contains("abrir mapas") || command.contains("abrir mapa") -> {
-                openMaps()
-            }
-
-            command.contains("donde estoy") || command.contains("cual es mi ubicacion") || command == "mi ubicacion" -> {
-                speakCurrentLocation()
-            }
-
-            navigationTarget != null -> {
-                navigateTo(navigationTarget)
-            }
-
-            command.contains("abrir ajustes") || command.contains("configuracion") -> {
-                openSettings(Settings.ACTION_SETTINGS)
-            }
-
-            command.contains("abrir wifi") || command.contains("ajustes wifi") -> {
-                openSettings(Settings.ACTION_WIFI_SETTINGS)
-            }
-
-            command.contains("abrir bluetooth") || command.contains("ajustes bluetooth") -> {
-                openSettings(Settings.ACTION_BLUETOOTH_SETTINGS)
-            }
-
-            command.contains("llamar emergencia") || command.contains("llama a emergencia") -> {
-                makePhoneCall("911")
-            }
-
-            callTarget != null -> {
-                makePhoneCall(callTarget)
-            }
-
-            smsCommand != null -> {
-                sendSmsToTarget(smsCommand.first, smsCommand.second)
-            }
-
-            command.contains("abrir whatsapp") -> {
-                openAppByPackage("com.whatsapp", "WhatsApp")
-            }
-
-            command.contains("abrir youtube") -> {
-                openAppByPackage("com.google.android.youtube", "YouTube")
-            }
-
+            matchesHelp(cleanCommand) -> speakAvailableCommands()
+            matchesTorchOn(cleanCommand) -> setFlashlight(true)
+            matchesTorchOff(cleanCommand) -> setFlashlight(false)
+            matchesTime(cleanCommand) -> speakCurrentTime()
+            matchesDate(cleanCommand) -> speakCurrentDate()
+            matchesBattery(cleanCommand) -> speakBatteryLevel()
+            matchesVolumeUp(cleanCommand) -> changeVolume(up = true)
+            matchesVolumeDown(cleanCommand) -> changeVolume(up = false)
+            matchesMute(cleanCommand) -> muteVolume()
+            matchesIdentifyObjects(cleanCommand) -> openCameraForObjectDetection()
+            matchesCamera(cleanCommand) -> openCamera()
+            matchesMaps(cleanCommand) -> openMaps()
+            matchesLocation(cleanCommand) -> speakDetailedLocation()
+            navigationTarget != null -> navigateTo(navigationTarget)
+            matchesSettings(cleanCommand) -> openSettings(Settings.ACTION_SETTINGS)
+            cleanCommand.contains("wifi") -> openSettings(Settings.ACTION_WIFI_SETTINGS)
+            cleanCommand.contains("bluetooth") -> openSettings(Settings.ACTION_BLUETOOTH_SETTINGS)
+            matchesEmergency(cleanCommand) -> makePhoneCall("911")
+            callTarget != null -> makePhoneCall(callTarget)
+            smsCommand != null -> sendSmsToTarget(smsCommand.first, smsCommand.second)
+            matchesWhatsApp(cleanCommand) -> openWhatsApp()
+            matchesYouTube(cleanCommand) -> openYouTube()
+            matchesGmail(cleanCommand) -> openGmail()
+            matchesSpotify(cleanCommand) -> openSpotify()
             else -> {
-                speak("Escuche: $rawCommand")
+                restartListening()
+                return
             }
+        }
+
+        restartListening()
+    }
+
+    private fun isCommandRecognized(command: String): Boolean {
+        return matchesHelp(command) || matchesTorchOn(command) || matchesTorchOff(command) ||
+                matchesTime(command) || matchesDate(command) || matchesBattery(command) ||
+                matchesVolumeUp(command) || matchesVolumeDown(command) || matchesMute(command) ||
+                matchesCamera(command) || matchesMaps(command) || matchesLocation(command) ||
+                matchesSettings(command) || matchesEmergency(command) ||
+                matchesWhatsApp(command) || matchesYouTube(command) || matchesGmail(command) ||
+                command.contains("llamar") || command.contains("enviar mensaje") ||
+                command.contains("navegar") || command.contains("llevame")
+    }
+
+    private fun matchesHelp(cmd: String) =
+        cmd.contains("ayuda") || cmd.contains("que puedes hacer") ||
+                cmd.contains("comandos") || cmd.contains("que sabes")
+
+    private fun matchesTorchOn(cmd: String) =
+        (cmd.contains("enciende") || cmd.contains("prende") || cmd.contains("activa")) &&
+                (cmd.contains("linterna") || cmd.contains("luz"))
+
+    private fun matchesTorchOff(cmd: String) =
+        (cmd.contains("apaga") || cmd.contains("desactiva")) &&
+                (cmd.contains("linterna") || cmd.contains("luz"))
+
+    private fun matchesTime(cmd: String) =
+        (cmd.contains("que hora") || cmd.contains("dime la hora") || cmd == "hora") &&
+                !cmd.contains("fecha")
+
+    private fun matchesDate(cmd: String) =
+        cmd.contains("que fecha") || cmd.contains("que dia") ||
+                cmd.contains("dime la fecha") || cmd.contains("dime el dia") ||
+                cmd == "fecha" || cmd == "dia"
+
+    private fun matchesBattery(cmd: String) =
+        cmd.contains("bateria") || cmd.contains("cuanta bateria")
+
+    private fun matchesVolumeUp(cmd: String) =
+        (cmd.contains("sube") || cmd.contains("aumenta")) && cmd.contains("volumen")
+
+    private fun matchesVolumeDown(cmd: String) =
+        (cmd.contains("baja") || cmd.contains("disminuye")) && cmd.contains("volumen")
+
+    private fun matchesMute(cmd: String) =
+        cmd.contains("silencio") || cmd.contains("mute")
+
+    private fun matchesIdentifyObjects(cmd: String) =
+        cmd.contains("que veo") || cmd.contains("que hay") ||
+                cmd.contains("identificar") || cmd.contains("que es esto") ||
+                cmd.contains("describir") || cmd.contains("reconocer objeto")
+
+    private fun matchesCamera(cmd: String) =
+        (cmd.contains("abrir") || cmd.contains("abre")) && cmd.contains("camara")
+
+    private fun matchesMaps(cmd: String) =
+        (cmd.contains("abrir") || cmd.contains("abre")) &&
+                (cmd.contains("mapas") || cmd.contains("mapa"))
+
+    private fun matchesLocation(cmd: String) =
+        cmd.contains("donde estoy") || cmd.contains("mi ubicacion") ||
+                cmd.contains("ubicacion actual") || cmd.contains("en que calle")
+
+    private fun matchesSettings(cmd: String) =
+        (cmd.contains("abrir") || cmd.contains("abre")) &&
+                (cmd.contains("ajustes") || cmd.contains("configuracion"))
+
+    private fun matchesEmergency(cmd: String) =
+        cmd.contains("emergencia")
+
+    private fun matchesWhatsApp(cmd: String) =
+        (cmd.contains("abrir") || cmd.contains("abre") || cmd.contains("abreme")) &&
+                (cmd.contains("whatsapp") || cmd.contains("guasap") || cmd.contains("wasa"))
+
+    private fun matchesYouTube(cmd: String) =
+        (cmd.contains("abrir") || cmd.contains("abre") || cmd.contains("abreme")) &&
+                (cmd.contains("youtube") || cmd.contains("videos"))
+
+    private fun matchesGmail(cmd: String) =
+        (cmd.contains("abrir") || cmd.contains("abre") || cmd.contains("abreme")) &&
+                (cmd.contains("gmail") || cmd.contains("correo"))
+
+    private fun matchesSpotify(cmd: String) =
+        (cmd.contains("abrir") || cmd.contains("abre") || cmd.contains("abreme")) &&
+                (cmd.contains("spotify") || cmd.contains("musica"))
+
+    private fun extractCallTarget(cmd: String): String? {
+        val prefixes = listOf("llamar a ", "llama a ", "llamale a ")
+        for (prefix in prefixes) {
+            if (cmd.contains(prefix)) {
+                return cmd.substringAfter(prefix).trim()
+            }
+        }
+        return null
+    }
+
+    private fun extractNavigationTarget(cmd: String): String? {
+        val prefixes = listOf("navegar a ", "llevame a ", "ir a ", "como llego a ")
+        for (prefix in prefixes) {
+            if (cmd.contains(prefix)) {
+                return cmd.substringAfter(prefix).trim()
+            }
+        }
+        return null
+    }
+
+    private fun openCameraForObjectDetection() {
+        speak("Abriendo reconocimiento de objetos")
+        val intent = Intent(this, ObjectDetectionActivity::class.java)
+        try {
+            startActivity(intent)
+        } catch (e: Exception) {
+            speak("No pude abrir el reconocimiento de objetos")
+        }
+    }
+
+    private fun speakDetailedLocation() {
+        if (currentAddress.isNotEmpty() && currentAddress != "Ubicación desconocida") {
+            speak("Estás en $currentAddress")
+        } else if (currentLocation != null) {
+            speak("Obteniendo dirección exacta")
+            updateAddress(currentLocation!!)
+            Handler(Looper.getMainLooper()).postDelayed({
+                if (currentAddress.isNotEmpty()) {
+                    speak("Estás en $currentAddress")
+                }
+            }, 2000)
+        } else {
+            speak("Obteniendo tu ubicación")
+            getCurrentLocation()
+        }
+    }
+
+    private fun getCurrentLocation() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) !=
+            PackageManager.PERMISSION_GRANTED) {
+            speak("Necesito permiso de ubicación")
+            return
+        }
+
+        fusedLocationClient.lastLocation.addOnSuccessListener { location ->
+            if (location != null) {
+                currentLocation = location
+                updateAddress(location)
+                speakDetailedLocation()
+            } else {
+                speak("No pude obtener tu ubicación")
+            }
+        }
+    }
+
+    private fun openWhatsApp() {
+        val intent = packageManager.getLaunchIntentForPackage("com.whatsapp")
+        if (intent != null) {
+            startActivity(intent)
+            speak("Abriendo WhatsApp")
+        } else {
+            speak("WhatsApp no está instalado")
+        }
+    }
+
+    private fun openYouTube() {
+        val intent = packageManager.getLaunchIntentForPackage("com.google.android.youtube")
+        if (intent != null) {
+            startActivity(intent)
+            speak("Abriendo YouTube")
+        } else {
+            // Intentar abrir en navegador
+            try {
+                val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com"))
+                startActivity(webIntent)
+                speak("Abriendo YouTube en navegador")
+            } catch (_: Exception) {
+                speak("YouTube no está disponible")
+            }
+        }
+    }
+
+    private fun openGmail() {
+        val intent = packageManager.getLaunchIntentForPackage("com.google.android.gm")
+        if (intent != null) {
+            startActivity(intent)
+            speak("Abriendo Gmail")
+        } else {
+            speak("Gmail no está instalado")
+        }
+    }
+
+    private fun openSpotify() {
+        val intent = packageManager.getLaunchIntentForPackage("com.spotify.music")
+        if (intent != null) {
+            startActivity(intent)
+            speak("Abriendo Spotify")
+        } else {
+            speak("Spotify no está instalado")
         }
     }
 
@@ -272,57 +508,61 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             .trim()
     }
 
-    private fun speakAvailableCommands() {
-        speak(
-            "Puedes decir: enciende o apaga la linterna, llamar a un contacto o numero, " +
-                "enviar mensaje a alguien, donde estoy, navegar a un destino, abrir camara, " +
-                "abrir mapas, abrir ajustes, subir o bajar volumen, silencio, hora, fecha y bateria."
-        )
+    private fun showCommandsList() {
+        val commands = """
+            Di "OK ASISTENTE" + tu comando:
+            
+            LINTERNA: Enciende/Apaga la linterna
+            INFORMACIÓN: Qué hora es, Qué día es, Batería
+            VOLUMEN: Sube/Baja volumen, Silencio
+            RECONOCIMIENTO: Qué veo, Identificar objetos
+            APPS: Abrir WhatsApp/YouTube/Gmail/Spotify/Cámara/Mapas
+            COMUNICACIÓN: Llamar a [nombre], Emergencia
+            NAVEGACIÓN: Dónde estoy, Navegar a [destino]
+            CONFIGURACIÓN: Abrir ajustes/WiFi/Bluetooth
+        """.trimIndent()
+
+        AlertDialog.Builder(this)
+            .setTitle("Comandos de Voz")
+            .setMessage(commands)
+            .setPositiveButton("Entendido", null)
+            .show()
+
+        speak("Di OK ASISTENTE seguido de tu comando")
     }
 
-    private fun extractCommandTarget(command: String, prefixes: List<String>): String? {
-        val prefix = prefixes.firstOrNull { command.startsWith(it) } ?: return null
-        val target = command.removePrefix(prefix).trim()
-        return target.takeIf { it.isNotBlank() }
+    private fun speakAvailableCommands() {
+        speak("Puedo ayudarte con linterna, hora, fecha, batería, volumen, llamadas, mensajes, navegación, reconocer objetos y abrir aplicaciones")
     }
 
     private fun parseSmsCommand(command: String): Pair<String, String>? {
-        if (!command.startsWith("enviar mensaje a ")) return null
-
-        val rest = command.removePrefix("enviar mensaje a ").trim()
+        if (!command.contains("enviar mensaje a")) return null
+        val rest = command.substringAfter("enviar mensaje a").trim()
         if (rest.isBlank()) return null
 
-        val separators = listOf(" diciendo ", " que diga ", " mensaje ")
+        val separators = listOf(" diciendo ", " que diga ")
         for (separator in separators) {
-            val index = rest.indexOf(separator)
-            if (index > 0) {
-                val target = rest.substring(0, index).trim()
-                val body = rest.substring(index + separator.length).trim()
+            if (rest.contains(separator)) {
+                val target = rest.substringBefore(separator).trim()
+                val body = rest.substringAfter(separator).trim()
                 if (target.isNotEmpty() && body.isNotEmpty()) {
                     return target to body
                 }
             }
         }
-
-        return rest to "Necesito ayuda, por favor."
+        return rest to "Necesito ayuda"
     }
 
     private fun setFlashlight(enabled: Boolean) {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
-            speak("Necesito permiso de camara para controlar la linterna")
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) !=
+            PackageManager.PERMISSION_GRANTED) {
+            speak("Necesito permiso de cámara")
             return
         }
 
         val cameraId = torchCameraId
         if (cameraId == null) {
-            speak("Este dispositivo no tiene linterna disponible")
-            return
-        }
-
-        if (isTorchEnabled == enabled) {
-            speak(if (enabled) "La linterna ya esta encendida" else "La linterna ya esta apagada")
+            speak("Este dispositivo no tiene linterna")
             return
         }
 
@@ -330,49 +570,42 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             cameraManager.setTorchMode(cameraId, enabled)
             isTorchEnabled = enabled
             speak(if (enabled) "Linterna encendida" else "Linterna apagada")
-        } catch (_: CameraAccessException) {
-            speak("No pude cambiar el estado de la linterna")
-        } catch (_: IllegalArgumentException) {
-            speak("No pude acceder a la linterna del dispositivo")
+        } catch (_: Exception) {
+            speak("No pude cambiar la linterna")
         }
     }
 
     private fun makePhoneCall(target: String) {
         val phone = resolvePhoneTarget(target)
         if (phone == null) {
-            speak("No encontre un numero para $target")
+            speak("No encontré el contacto $target")
             return
         }
 
         val hasPermission = ContextCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE) ==
-            PackageManager.PERMISSION_GRANTED
+                PackageManager.PERMISSION_GRANTED
 
         val action = if (hasPermission) Intent.ACTION_CALL else Intent.ACTION_DIAL
         val intent = Intent(action, Uri.parse("tel:$phone"))
 
         try {
             startActivity(intent)
-            if (hasPermission) {
-                speak("Llamando a $target")
-            } else {
-                speak("No tengo permiso de llamada directa. Te abri el marcador con el numero")
-            }
-        } catch (_: ActivityNotFoundException) {
+            speak(if (hasPermission) "Llamando a $target" else "Abriendo marcador")
+        } catch (_: Exception) {
             speak("No pude iniciar la llamada")
         }
     }
 
     private fun sendSmsToTarget(target: String, message: String) {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
+            PackageManager.PERMISSION_GRANTED) {
             speak("Necesito permiso para enviar mensajes")
             return
         }
 
         val phone = resolvePhoneTarget(target)
         if (phone == null) {
-            speak("No encontre el numero de $target para enviar el mensaje")
+            speak("No encontré el número de $target")
             return
         }
 
@@ -384,12 +617,7 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 SmsManager.getDefault()
             }
 
-            if (smsManager == null) {
-                speak("No pude acceder al servicio de mensajes")
-                return
-            }
-
-            smsManager.sendTextMessage(phone, null, message, null, null)
+            smsManager?.sendTextMessage(phone, null, message, null, null)
             speak("Mensaje enviado a $target")
         } catch (_: Exception) {
             speak("No pude enviar el mensaje")
@@ -404,8 +632,7 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         if (phoneCandidate.length >= 7) return phoneCandidate
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
+            PackageManager.PERMISSION_GRANTED) {
             return null
         }
 
@@ -442,14 +669,12 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun speakCurrentTime() {
-        val formatter = DateTimeFormatter.ofPattern("HH:mm", spanishLocale)
-        val time = LocalDateTime.now().format(formatter)
+        val time = SimpleDateFormat("HH:mm", spanishLocale).format(Date())
         speak("Son las $time")
     }
 
     private fun speakCurrentDate() {
-        val formatter = DateTimeFormatter.ofPattern("EEEE d 'de' MMMM", spanishLocale)
-        val date = LocalDateTime.now().format(formatter)
+        val date = SimpleDateFormat("EEEE d 'de' MMMM", spanishLocale).format(Date())
         speak("Hoy es $date")
     }
 
@@ -459,12 +684,12 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         val scale = batteryStatus?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
 
         if (level < 0 || scale <= 0) {
-            speak("No pude obtener el nivel de bateria")
+            speak("No pude obtener el nivel de batería")
             return
         }
 
         val percentage = (level * 100) / scale
-        speak("Tu bateria esta al $percentage por ciento")
+        speak("Tu batería está al $percentage por ciento")
     }
 
     private fun changeVolume(up: Boolean) {
@@ -482,9 +707,9 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         val intent = Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA)
         try {
             startActivity(intent)
-            speak("Abriendo camara")
-        } catch (_: ActivityNotFoundException) {
-            speak("No encontre una aplicacion de camara")
+            speak("Abriendo cámara")
+        } catch (_: Exception) {
+            speak("No encontré aplicación de cámara")
         }
     }
 
@@ -495,8 +720,8 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         try {
             startActivity(intent)
             speak("Abriendo mapas")
-        } catch (_: ActivityNotFoundException) {
-            speak("No encontre Google Maps en este dispositivo")
+        } catch (_: Exception) {
+            speak("No encontré Google Maps")
         }
     }
 
@@ -506,47 +731,10 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
         try {
             startActivity(intent)
-            speak("Iniciando navegacion a $destination")
-        } catch (_: ActivityNotFoundException) {
-            speak("No pude iniciar la navegacion porque Google Maps no esta disponible")
+            speak("Navegando a $destination")
+        } catch (_: Exception) {
+            speak("Google Maps no está disponible")
         }
-    }
-
-    private fun speakCurrentLocation() {
-        val hasFine = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
-            PackageManager.PERMISSION_GRANTED
-        val hasCoarse = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) ==
-            PackageManager.PERMISSION_GRANTED
-
-        if (!hasFine && !hasCoarse) {
-            speak("Necesito permiso de ubicacion para decirte donde estas")
-            return
-        }
-
-        val locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
-        val providers = locationManager.getProviders(true)
-        var bestLocation: Location? = null
-
-        for (provider in providers) {
-            val location = try {
-                locationManager.getLastKnownLocation(provider)
-            } catch (_: SecurityException) {
-                null
-            }
-
-            if (location != null && (bestLocation == null || location.accuracy < bestLocation!!.accuracy)) {
-                bestLocation = location
-            }
-        }
-
-        if (bestLocation == null) {
-            speak("No tengo una ubicacion reciente disponible")
-            return
-        }
-
-        val lat = String.format(Locale.US, "%.5f", bestLocation!!.latitude)
-        val lon = String.format(Locale.US, "%.5f", bestLocation!!.longitude)
-        speak("Tu ubicacion aproximada es latitud $lat y longitud $lon")
     }
 
     private fun openSettings(action: String) {
@@ -554,20 +742,9 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         try {
             startActivity(intent)
             speak("Abriendo ajustes")
-        } catch (_: ActivityNotFoundException) {
-            speak("No pude abrir esa pantalla de ajustes")
+        } catch (_: Exception) {
+            speak("No pude abrir ajustes")
         }
-    }
-
-    private fun openAppByPackage(packageName: String, appName: String) {
-        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
-        if (launchIntent == null) {
-            speak("No encontre $appName instalado")
-            return
-        }
-
-        startActivity(launchIntent)
-        speak("Abriendo $appName")
     }
 
     private fun checkAndRequestPermissions() {
@@ -582,15 +759,7 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         if (permissionsToRequest.isNotEmpty()) {
             AlertDialog.Builder(this)
                 .setTitle("Permisos necesarios")
-                .setMessage(
-                    "VAPAJOMI necesita acceso a:\n\n" +
-                        "- Microfono: para comandos de voz\n" +
-                        "- Camara: para detectar obstaculos\n" +
-                        "- Contactos: para hacer llamadas\n" +
-                        "- Telefono: para realizar llamadas\n" +
-                        "- SMS: para enviar mensajes\n" +
-                        "- Ubicacion: para navegacion"
-                )
+                .setMessage("VAPAJOMI necesita permisos para funcionar.")
                 .setPositiveButton("Aceptar") { _, _ ->
                     ActivityCompat.requestPermissions(
                         this,
@@ -598,12 +767,11 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                         permissionsRequestCode
                     )
                 }
-                .setNegativeButton("Cancelar") { _, _ ->
-                    speak("Los permisos son necesarios para el funcionamiento de la aplicacion")
-                }
+                .setCancelable(false)
                 .show()
         } else {
-            speak("Todos los permisos estan activos. En que puedo ayudarte?")
+            startContinuousListening()
+            startLocationUpdates()
         }
     }
 
@@ -615,18 +783,16 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
 
         if (requestCode == permissionsRequestCode) {
-            val allGranted = grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }
-
-            if (allGranted) {
-                speak("Permisos concedidos. Estoy listo para ayudarte")
-            } else {
-                speak("Algunos permisos fueron denegados. Algunas funciones podrian no estar disponibles")
-            }
+            startContinuousListening()
+            startLocationUpdates()
         }
     }
 
     private fun logout() {
-        speak("Cerrando sesion")
+        isListening = false
+        voiceCommandListener.stopListening()
+        fusedLocationClient.removeLocationUpdates(locationCallback)
+        speak("Cerrando sesión")
 
         Handler(Looper.getMainLooper()).postDelayed({
             mAuth.signOut()
@@ -637,10 +803,7 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
-            val result = tts.setLanguage(spanishLocale)
-            if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                Toast.makeText(this, "Idioma no soportado", Toast.LENGTH_SHORT).show()
-            }
+            tts.setLanguage(spanishLocale)
         }
     }
 
@@ -649,7 +812,9 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     override fun onDestroy() {
+        isListening = false
         voiceCommandListener.destroy()
+        fusedLocationClient.removeLocationUpdates(locationCallback)
 
         if (::tts.isInitialized) {
             tts.stop()
@@ -657,5 +822,14 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
 
         super.onDestroy()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (!isListening) {
+            Handler(Looper.getMainLooper()).postDelayed({
+                startContinuousListening()
+            }, 500)
+        }
     }
 }
