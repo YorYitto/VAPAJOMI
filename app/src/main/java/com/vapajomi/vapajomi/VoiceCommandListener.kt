@@ -18,7 +18,7 @@ class VoiceCommandListener(
 
     init {
         if (!SpeechRecognizer.isRecognitionAvailable(context)) {
-            onError("El reconocimiento de voz no está disponible")
+            onError("El reconocimiento de voz no esta disponible en este dispositivo")
         } else {
             speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
                 setRecognitionListener(object : RecognitionListener {
@@ -39,7 +39,7 @@ class VoiceCommandListener(
                         if (!spokenText.isNullOrEmpty()) {
                             onResult(spokenText)
                         } else {
-                            onError("No se detectó voz")
+                            onError("No se detecto voz")
                         }
                     }
 
@@ -79,15 +79,15 @@ class VoiceCommandListener(
     private fun mapError(error: Int): String {
         return when (error) {
             SpeechRecognizer.ERROR_AUDIO -> "Error de audio"
-            SpeechRecognizer.ERROR_CLIENT -> "Error interno"
-            SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Faltan permisos"
+            SpeechRecognizer.ERROR_CLIENT -> "Error interno del cliente"
+            SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Faltan permisos de microfono"
             SpeechRecognizer.ERROR_NETWORK -> "Error de red"
-            SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Tiempo agotado"
-            SpeechRecognizer.ERROR_NO_MATCH -> "No entendí"
-            SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Reconocedor ocupado"
-            SpeechRecognizer.ERROR_SERVER -> "Error del servidor"
-            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No se detectó voz"
-            else -> "Error desconocido"
+            SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Tiempo de espera agotado"
+            SpeechRecognizer.ERROR_NO_MATCH -> "No entendi lo que dijiste"
+            SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "El reconocedor esta ocupado"
+            SpeechRecognizer.ERROR_SERVER -> "Error del servidor de voz"
+            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No se detecto voz"
+            else -> "Error desconocido de reconocimiento"
         }
     }
 }
