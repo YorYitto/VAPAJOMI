@@ -168,6 +168,10 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         val smsCommand = parseSmsCommand(command)
         val callTarget = extractCommandTarget(command, listOf("llamar a ", "llama a "))
         val navigationTarget = extractCommandTarget(command, listOf("navegar a ", "llevame a ", "ir a "))
+        val assistedNavigationTarget = extractCommandTarget(
+            command,
+            listOf("navegacion asistida a ", "guiame a ", "guiame hacia ", "asisteme para llegar a ")
+        )
 
         when {
             command == "ayuda" || command.contains("que puedes hacer") || command.contains("comandos") -> {
@@ -211,8 +215,17 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             }
 
             command.contains("que es esto") || command.contains("identifica esto") || command.contains("que objeto es este") -> {
-                speak("Abriendo identificador de objetos")
-                startActivity(Intent(this, ObjectDetectionActivity::class.java))
+                openObjectDetection()
+            }
+
+            command.contains("detectar obstaculos") ||
+                command.contains("modo obstaculos") ||
+                command.contains("modo navegacion asistida") -> {
+                openObjectDetection()
+            }
+
+            assistedNavigationTarget != null -> {
+                openObjectDetection(assistedNavigationTarget)
             }
 
             command.contains("abrir camara") -> {
@@ -280,8 +293,9 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private fun speakAvailableCommands() {
         speak(
             "Puedes decir: enciende o apaga la linterna, llamar a un contacto o numero, " +
-                "enviar mensaje a alguien, donde estoy, navegar a un destino, abrir camara, " +
-                "abrir mapas, abrir ajustes, subir o bajar volumen, silencio, hora, fecha y bateria."
+                "enviar mensaje a alguien, donde estoy, navegar a un destino, guiame a un destino, " +
+                "detectar obstaculos, abrir camara, abrir mapas, abrir ajustes, subir o bajar volumen, " +
+                "silencio, hora, fecha y bateria."
         )
     }
 
@@ -506,14 +520,32 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun navigateTo(destination: String) {
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:q=${Uri.encode(destination)}"))
+        val routeUri = Uri.parse(
+            "https://www.google.com/maps/dir/?api=1&destination=${Uri.encode(destination)}&travelmode=walking"
+        )
+        val intent = Intent(Intent.ACTION_VIEW, routeUri)
         intent.setPackage("com.google.android.apps.maps")
 
         try {
             startActivity(intent)
-            speak("Iniciando navegacion a $destination")
+            speak("Abriendo ruta a pie hacia $destination")
         } catch (_: ActivityNotFoundException) {
             speak("No pude iniciar la navegacion porque Google Maps no esta disponible")
+        }
+    }
+
+    private fun openObjectDetection(destination: String? = null) {
+        val intent = Intent(this, ObjectDetectionActivity::class.java)
+        val destinationLabel = destination?.trim()?.takeIf { it.isNotEmpty() }
+        destinationLabel?.let {
+            intent.putExtra(ObjectDetectionActivity.EXTRA_NAVIGATION_DESTINATION, it)
+        }
+
+        startActivity(intent)
+        if (destinationLabel == null) {
+            speak("Abriendo detector de objetos y obstaculos")
+        } else {
+            speak("Abriendo navegacion asistida hacia $destinationLabel")
         }
     }
 
