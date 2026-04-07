@@ -1,4 +1,4 @@
-﻿package com.vapajomi.vapajomi
+package com.vapajomi.vapajomi
 
 import android.Manifest
 import android.content.ActivityNotFoundException
@@ -208,6 +208,11 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
             command.contains("silencio") || command.contains("mute") -> {
                 muteVolume()
+            }
+
+            command.contains("que es esto") || command.contains("identifica esto") || command.contains("que objeto es este") -> {
+                speak("Abriendo identificador de objetos")
+                startActivity(Intent(this, ObjectDetectionActivity::class.java))
             }
 
             command.contains("abrir camara") -> {
