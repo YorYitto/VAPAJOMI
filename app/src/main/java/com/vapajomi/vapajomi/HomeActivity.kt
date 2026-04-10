@@ -22,8 +22,8 @@ import android.provider.ContactsContract
 import android.provider.MediaStore
 import android.provider.Settings
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.telephony.SmsManager
-import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
@@ -49,13 +49,17 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private lateinit var welcomeText: TextView
     private lateinit var voiceResultText: TextView
-    private lateinit var listenButton: Button
-    private lateinit var logoutButton: Button
+    private lateinit var logoutButton: android.widget.Button
     private lateinit var cameraManager: CameraManager
     private lateinit var audioManager: AudioManager
     private var torchCameraId: String? = null
     private var isTorchEnabled = false
     private val spanishLocale: Locale = Locale.forLanguageTag("es-ES")
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var isWakeWordListening = false
+    private var isAwaitingCommand = false
+    private var shouldResumeWakeListeningAfterSpeech = false
+    private val wakeWordVariants = setOf("activate", "activar", "activa", "activate por favor")
 
     private val permissionsRequestCode = 100
 
@@ -80,31 +84,43 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
         welcomeText = findViewById(R.id.welcomeText)
         voiceResultText = findViewById(R.id.voiceResultText)
-        listenButton = findViewById(R.id.listenButton)
         logoutButton = findViewById(R.id.logoutButton)
 
         voiceCommandListener = VoiceCommandListener(
             context = this,
             onResult = { text ->
                 runOnUiThread {
-                    voiceResultText.text = "Escuche: $text"
-                    handleVoiceCommand(text)
+                    handleVoiceInput(text)
                 }
             },
             onError = { message ->
                 runOnUiThread {
-                    voiceResultText.text = message
-                    Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+                    handleVoiceError(message)
                 }
             }
         )
 
+        tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) = Unit
+
+            override fun onDone(utteranceId: String?) {
+                if (shouldResumeWakeListeningAfterSpeech) {
+                    shouldResumeWakeListeningAfterSpeech = false
+                    mainHandler.postDelayed({ startWakeWordListening() }, 1200)
+                }
+            }
+
+            @Deprecated("Deprecated in Java")
+            override fun onError(utteranceId: String?) {
+                if (shouldResumeWakeListeningAfterSpeech) {
+                    shouldResumeWakeListeningAfterSpeech = false
+                    mainHandler.postDelayed({ startWakeWordListening() }, 1200)
+                }
+            }
+        })
+
         loadUserName()
         initTorch()
-
-        listenButton.setOnClickListener {
-            startVoiceListening()
-        }
 
         logoutButton.setOnClickListener {
             logout()
@@ -138,7 +154,9 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    private fun startVoiceListening() {
+    private fun startWakeWordListening() {
+        if (isFinishing || isDestroyed || isWakeWordListening) return
+
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED
         ) {
@@ -150,8 +168,75 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             return
         }
 
-        voiceResultText.text = "Escuchando..."
+        isWakeWordListening = true
+        isAwaitingCommand = false
+        voiceResultText.text = "Di 'Activate' para comenzar"
         voiceCommandListener.startListening()
+    }
+
+    private fun listenForActivatedCommand() {
+        if (isFinishing || isDestroyed) return
+
+        isWakeWordListening = true
+        isAwaitingCommand = true
+        voiceResultText.text = "Activado. Di tu comando ahora"
+        voiceCommandListener.startListening()
+    }
+
+    private fun handleVoiceInput(text: String) {
+        isWakeWordListening = false
+        val command = normalizeCommand(text)
+
+        if (!isAwaitingCommand) {
+            if (command in wakeWordVariants) {
+                voiceResultText.text = "Activado. Te escucho"
+                mainHandler.postDelayed({ listenForActivatedCommand() }, 300)
+            } else {
+                voiceResultText.text = "Esperando 'Activate'"
+                mainHandler.postDelayed({ startWakeWordListening() }, 800)
+            }
+            return
+        }
+
+        isAwaitingCommand = false
+        voiceResultText.text = "Escuche: $text"
+        handleVoiceCommand(text)
+    }
+
+    private fun handleVoiceError(message: String) {
+        isWakeWordListening = false
+
+        if (message == "No se detecto voz" || message == "No entendi lo que dijiste") {
+            voiceResultText.text = if (isAwaitingCommand) {
+                "No te entendi. Di tu comando nuevamente"
+            } else {
+                "Esperando 'Activate'"
+            }
+
+            mainHandler.postDelayed({
+                if (isAwaitingCommand) {
+                    listenForActivatedCommand()
+                } else {
+                    startWakeWordListening()
+                }
+            }, 800)
+            return
+        }
+
+        if (message == "El reconocedor esta ocupado" || message == "Error interno del cliente") {
+            mainHandler.postDelayed({
+                if (isAwaitingCommand) {
+                    listenForActivatedCommand()
+                } else {
+                    startWakeWordListening()
+                }
+            }, 1000)
+            return
+        }
+
+        voiceResultText.text = message
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+        mainHandler.postDelayed({ startWakeWordListening() }, 1500)
     }
 
     private fun initTorch() {
@@ -167,10 +252,20 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         val command = normalizeCommand(rawCommand)
         val smsCommand = parseSmsCommand(command)
         val callTarget = extractCommandTarget(command, listOf("llamar a ", "llama a "))
-        val navigationTarget = extractCommandTarget(command, listOf("navegar a ", "llevame a ", "ir a "))
+        val navigationTarget = extractCommandTarget(
+            command,
+            listOf("navegar a ", "llevame a ", "ir a ", "dirigete a ", "dirijete a ", "llevame hacia ")
+        )
         val assistedNavigationTarget = extractCommandTarget(
             command,
-            listOf("navegacion asistida a ", "guiame a ", "guiame hacia ", "asisteme para llegar a ")
+            listOf(
+                "navegacion asistida a ",
+                "guiame a ",
+                "guiame hacia ",
+                "asisteme para llegar a ",
+                "acompaname a ",
+                "acompaname hacia "
+            )
         )
 
         when {
@@ -214,13 +309,22 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 muteVolume()
             }
 
-            command.contains("que es esto") || command.contains("identifica esto") || command.contains("que objeto es este") -> {
+            command.contains("que es esto") ||
+                command.contains("identifica esto") ||
+                command.contains("que objeto es este") ||
+                command.contains("que hay al frente mio") ||
+                command.contains("que tengo al frente") ||
+                command.contains("dime que hay al frente mio") ||
+                command.contains("analiza lo que tengo al frente") ||
+                command.contains("mira al frente") -> {
                 openObjectDetection()
             }
 
             command.contains("detectar obstaculos") ||
                 command.contains("modo obstaculos") ||
-                command.contains("modo navegacion asistida") -> {
+                command.contains("modo navegacion asistida") ||
+                command.contains("analiza objetos") ||
+                command.contains("analiza el entorno") -> {
                 openObjectDetection()
             }
 
@@ -241,7 +345,7 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             }
 
             navigationTarget != null -> {
-                navigateTo(navigationTarget)
+                startAssistedNavigation(navigationTarget)
             }
 
             command.contains("abrir ajustes") || command.contains("configuracion") -> {
@@ -293,9 +397,9 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private fun speakAvailableCommands() {
         speak(
             "Puedes decir: enciende o apaga la linterna, llamar a un contacto o numero, " +
-                "enviar mensaje a alguien, donde estoy, navegar a un destino, guiame a un destino, " +
-                "detectar obstaculos, abrir camara, abrir mapas, abrir ajustes, subir o bajar volumen, " +
-                "silencio, hora, fecha y bateria."
+                "enviar mensaje a alguien, donde estoy, navegar a un destino, dirigete a un destino, guiame a un destino, " +
+                "dime que hay al frente mio, detectar obstaculos, abrir camara, abrir mapas, abrir ajustes, " +
+                "subir o bajar volumen, silencio, hora, fecha y bateria."
         )
     }
 
@@ -519,22 +623,34 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    private fun navigateTo(destination: String) {
-        val routeUri = Uri.parse(
-            "https://www.google.com/maps/dir/?api=1&destination=${Uri.encode(destination)}&travelmode=walking"
-        )
-        val intent = Intent(Intent.ACTION_VIEW, routeUri)
-        intent.setPackage("com.google.android.apps.maps")
-
-        try {
-            startActivity(intent)
-            speak("Abriendo ruta a pie hacia $destination")
-        } catch (_: ActivityNotFoundException) {
-            speak("No pude iniciar la navegacion porque Google Maps no esta disponible")
+    private fun startAssistedNavigation(destination: String) {
+        val mapsIntent = Intent(
+            Intent.ACTION_VIEW,
+            Uri.parse("google.navigation:q=${Uri.encode(destination)}&mode=w")
+        ).apply {
+            setPackage("com.google.android.apps.maps")
         }
+
+        val mapsAvailable = mapsIntent.resolveActivity(packageManager) != null
+
+        if (mapsAvailable) {
+            try {
+                startActivity(mapsIntent)
+                speak("Iniciando guia a pie hacia $destination y activando camara de asistencia")
+                mainHandler.postDelayed({
+                    openObjectDetection(destination, announce = false)
+                }, 1800)
+                return
+            } catch (_: ActivityNotFoundException) {
+                // Sigue con el modo de camara aunque Maps falle.
+            }
+        }
+
+        speak("No pude abrir Google Maps. Activando la camara de asistencia hacia $destination")
+        openObjectDetection(destination, announce = false)
     }
 
-    private fun openObjectDetection(destination: String? = null) {
+    private fun openObjectDetection(destination: String? = null, announce: Boolean = true) {
         val intent = Intent(this, ObjectDetectionActivity::class.java)
         val destinationLabel = destination?.trim()?.takeIf { it.isNotEmpty() }
         destinationLabel?.let {
@@ -542,10 +658,12 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
 
         startActivity(intent)
-        if (destinationLabel == null) {
-            speak("Abriendo detector de objetos y obstaculos")
-        } else {
-            speak("Abriendo navegacion asistida hacia $destinationLabel")
+        if (announce) {
+            if (destinationLabel == null) {
+                speak("Abriendo detector de objetos y obstaculos")
+            } else {
+                speak("Abriendo navegacion asistida hacia $destinationLabel")
+            }
         }
     }
 
@@ -641,6 +759,7 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 .show()
         } else {
             speak("Todos los permisos estan activos. En que puedo ayudarte?")
+            startWakeWordListening()
         }
     }
 
@@ -656,6 +775,7 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
             if (allGranted) {
                 speak("Permisos concedidos. Estoy listo para ayudarte")
+                startWakeWordListening()
             } else {
                 speak("Algunos permisos fueron denegados. Algunas funciones podrian no estar disponibles")
             }
@@ -682,10 +802,21 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun speak(text: String) {
-        tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
+        voiceCommandListener.stopListening()
+        isWakeWordListening = false
+        shouldResumeWakeListeningAfterSpeech = true
+        tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "vapajomi_tts")
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (!isAwaitingCommand && !tts.isSpeaking) {
+            mainHandler.postDelayed({ startWakeWordListening() }, 600)
+        }
     }
 
     override fun onDestroy() {
+        mainHandler.removeCallbacksAndMessages(null)
         voiceCommandListener.destroy()
 
         if (::tts.isInitialized) {

@@ -25,23 +25,13 @@
         android:textColor="#757575"
         android:textSize="20sp" />
 
-    <Button
-        android:id="@+id/listenButton"
-        style="@style/Widget.MaterialComponents.Button"
-        android:layout_width="match_parent"
-        android:layout_height="60dp"
-        android:layout_marginBottom="16dp"
-        android:text="Escuchar voz"
-        android:textSize="16sp"
-        android:textStyle="bold" />
-
     <TextView
         android:id="@+id/voiceResultText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginBottom="36dp"
         android:gravity="center"
-        android:text="Pulsa Escuchar voz para comenzar"
+        android:text="Di 'Activate' para comenzar"
         android:textColor="#333333"
         android:textSize="16sp" />
 

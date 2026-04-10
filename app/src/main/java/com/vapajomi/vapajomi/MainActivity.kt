@@ -1,12 +1,22 @@
 package com.vapajomi.vapajomi
 
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.util.Patterns
 import android.widget.Button
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.textfield.TextInputEditText
+import com.google.firebase.FirebaseApp
+import com.google.firebase.FirebaseNetworkException
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
+import com.google.firebase.auth.FirebaseAuthInvalidUserException
+import com.google.firebase.auth.FirebaseAuthMissingActivityForRecaptchaException
 
 class MainActivity : AppCompatActivity() {
 
@@ -15,16 +25,26 @@ class MainActivity : AppCompatActivity() {
     private lateinit var loginButton: Button
     private lateinit var registerButton: Button
     private lateinit var mAuth: FirebaseAuth
+    private var isLoggingIn = false
+    private val loginTimeoutHandler = Handler(Looper.getMainLooper())
+    private val loginTimeoutRunnable = Runnable {
+        if (isLoggingIn) {
+            setLoginInProgress(false)
+            Toast.makeText(
+                this,
+                "El inicio de sesion esta tardando demasiado. Revisa tu conexion e intenta de nuevo",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Inicializar Firebase primero
+        FirebaseApp.initializeApp(this)
         mAuth = FirebaseAuth.getInstance()
 
-        // Verificar si ya hay una sesión activa
         if (mAuth.currentUser != null) {
-            // Usuario ya está logueado, ir directo a Home
             goToHome()
             return
         }
@@ -46,8 +66,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loginUser() {
+        if (isLoggingIn) return
+
         val email = emailEditText.text.toString().trim()
         val password = passwordEditText.text.toString().trim()
+
+        emailEditText.error = null
+        passwordEditText.error = null
 
         if (email.isEmpty()) {
             emailEditText.error = "El email es requerido"
@@ -55,39 +80,90 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        if (!Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
+            emailEditText.error = "Ingresa un correo valido"
+            emailEditText.requestFocus()
+            return
+        }
+
         if (password.isEmpty()) {
-            passwordEditText.error = "La contraseña es requerida"
+            passwordEditText.error = "La contrasena es requerida"
             passwordEditText.requestFocus()
             return
         }
 
         if (password.length < 6) {
-            passwordEditText.error = "La contraseña debe tener mínimo 6 caracteres"
+            passwordEditText.error = "La contrasena debe tener minimo 6 caracteres"
             passwordEditText.requestFocus()
             return
         }
 
-        // Iniciar sesión con Firebase
-        mAuth.signInWithEmailAndPassword(email, password)
-            .addOnCompleteListener(this) { task ->
-                if (task.isSuccessful) {
-                    // Login exitoso - ir a HomeActivity
-                    Toast.makeText(
-                        this,
-                        "Login exitoso",
-                        Toast.LENGTH_SHORT
-                    ).show()
+        if (!hasInternetConnection()) {
+            Toast.makeText(this, "No hay conexion a internet", Toast.LENGTH_LONG).show()
+            return
+        }
 
-                    goToHome()
-                } else {
-                    // Login fallido
-                    Toast.makeText(
-                        this,
-                        "Error: ${task.exception?.localizedMessage}",
-                        Toast.LENGTH_LONG
-                    ).show()
+        setLoginInProgress(true)
+        loginTimeoutHandler.removeCallbacks(loginTimeoutRunnable)
+        loginTimeoutHandler.postDelayed(loginTimeoutRunnable, 15000)
+
+        try {
+            mAuth.signInWithEmailAndPassword(email, password)
+                .addOnCompleteListener(this) { task ->
+                    setLoginInProgress(false)
+
+                    if (task.isSuccessful) {
+                        Toast.makeText(this, "Login exitoso", Toast.LENGTH_SHORT).show()
+                        goToHome()
+                    } else {
+                        handleLoginError(task.exception)
+                    }
                 }
-            }
+                .addOnCanceledListener {
+                    setLoginInProgress(false)
+                    Toast.makeText(this, "El inicio de sesion fue cancelado", Toast.LENGTH_LONG).show()
+                }
+        } catch (exception: Exception) {
+            setLoginInProgress(false)
+            handleLoginError(exception)
+        }
+    }
+
+    private fun setLoginInProgress(inProgress: Boolean) {
+        isLoggingIn = inProgress
+        if (!inProgress) {
+            loginTimeoutHandler.removeCallbacks(loginTimeoutRunnable)
+        }
+        loginButton.isEnabled = !inProgress
+        registerButton.isEnabled = !inProgress
+        loginButton.text = if (inProgress) "Ingresando..." else "Iniciar Sesion"
+    }
+
+    private fun hasInternetConnection(): Boolean {
+        val connectivityManager = getSystemService(ConnectivityManager::class.java) ?: return false
+        val network = connectivityManager.activeNetwork ?: return false
+        val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
+
+        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    }
+
+    override fun onDestroy() {
+        loginTimeoutHandler.removeCallbacks(loginTimeoutRunnable)
+        super.onDestroy()
+    }
+
+    private fun handleLoginError(exception: Exception?) {
+        val message = when (exception) {
+            is FirebaseAuthInvalidUserException -> "No existe una cuenta con ese correo"
+            is FirebaseAuthInvalidCredentialsException -> "Correo o contrasena incorrectos"
+            is FirebaseNetworkException -> "Sin conexion. Verifica tu internet e intenta de nuevo"
+            is FirebaseAuthMissingActivityForRecaptchaException ->
+                "No se pudo validar el inicio de sesion. Intenta nuevamente"
+            else -> exception?.localizedMessage ?: "No se pudo iniciar sesion"
+        }
+
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
     }
 
     private fun goToHome() {
