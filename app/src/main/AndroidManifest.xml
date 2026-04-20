@@ -9,6 +9,7 @@
     <!-- Permisos de Audio -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Permisos de Contactos -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
@@ -26,6 +27,7 @@
     <!-- Permisos de Cámara -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.sensor.proximity" android:required="false" />
 
     <!-- Permisos de Ubicación (para Google Maps) -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
@@ -33,6 +35,13 @@
 
     <!-- Permisos de Vibración (para feedback) -->
     <uses-permission android:name="android.permission.VIBRATE" />
+
+    <queries>
+        <package android:name="com.whatsapp" />
+        <package android:name="com.instagram.android" />
+        <package android:name="com.google.android.youtube" />
+        <package android:name="com.google.android.apps.maps" />
+    </queries>
 
     <application
         android:allowBackup="true"

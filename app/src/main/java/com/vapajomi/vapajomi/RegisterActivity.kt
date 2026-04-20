@@ -2,6 +2,7 @@ package com.vapajomi.vapajomi
 
 import android.content.Intent
 import android.os.Bundle
+import android.util.Patterns
 import android.widget.Button
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -20,6 +21,7 @@ class RegisterActivity : AppCompatActivity() {
 
     private lateinit var mAuth: FirebaseAuth
     private lateinit var database: FirebaseDatabase
+    private var isRegistering = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -45,10 +47,14 @@ class RegisterActivity : AppCompatActivity() {
     }
 
     private fun registerUser() {
+        if (isRegistering) return
+
         val name = nameEditText.text.toString().trim()
         val email = emailEditText.text.toString().trim()
         val password = passwordEditText.text.toString().trim()
         val confirmPassword = confirmPasswordEditText.text.toString().trim()
+
+        clearErrors()
 
         if (name.isEmpty()) {
             nameEditText.error = "El nombre es requerido"
@@ -62,64 +68,90 @@ class RegisterActivity : AppCompatActivity() {
             return
         }
 
+        if (!Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
+            emailEditText.error = "Ingresa un correo valido"
+            emailEditText.requestFocus()
+            return
+        }
+
         if (password.isEmpty()) {
-            passwordEditText.error = "La contraseña es requerida"
+            passwordEditText.error = "La contrasena es requerida"
             passwordEditText.requestFocus()
             return
         }
 
         if (password.length < 6) {
-            passwordEditText.error = "La contraseña debe tener mínimo 6 caracteres"
+            passwordEditText.error = "La contrasena debe tener minimo 6 caracteres"
             passwordEditText.requestFocus()
             return
         }
 
         if (password != confirmPassword) {
-            confirmPasswordEditText.error = "Las contraseñas no coinciden"
+            confirmPasswordEditText.error = "Las contrasenas no coinciden"
             confirmPasswordEditText.requestFocus()
             return
         }
 
+        setRegisterInProgress(true)
         mAuth.createUserWithEmailAndPassword(email, password)
             .addOnCompleteListener(this) { task ->
                 if (task.isSuccessful) {
-                    val userId = mAuth.currentUser?.uid
-
-                    val userMap = hashMapOf(
-                        "name" to name,
-                        "email" to email
-                    )
-
-                    userId?.let {
-                        database.reference.child("users").child(it).setValue(userMap)
-                            .addOnSuccessListener {
-                                Toast.makeText(
-                                    this,
-                                    "Cuenta creada exitosamente",
-                                    Toast.LENGTH_SHORT
-                                ).show()
-
-                                // Ir a HomeActivity después de registrarse
-                                val intent = Intent(this, HomeActivity::class.java)
-                                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-                                startActivity(intent)
-                                finish()
-                            }
-                            .addOnFailureListener { e ->
-                                Toast.makeText(
-                                    this,
-                                    "Error al guardar datos: ${e.localizedMessage}",
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            }
-                    }
+                    saveUserData(name, email)
                 } else {
+                    setRegisterInProgress(false)
                     Toast.makeText(
                         this,
-                        "Error: ${task.exception?.localizedMessage}",
+                        "No se pudo crear la cuenta: ${task.exception?.localizedMessage}",
                         Toast.LENGTH_LONG
                     ).show()
                 }
             }
+    }
+
+    private fun saveUserData(name: String, email: String) {
+        val userId = mAuth.currentUser?.uid
+        if (userId == null) {
+            setRegisterInProgress(false)
+            Toast.makeText(this, "No se pudo obtener el usuario creado", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        val userMap = hashMapOf(
+            "name" to name,
+            "email" to email
+        )
+
+        database.reference.child("users").child(userId).setValue(userMap)
+            .addOnSuccessListener {
+                setRegisterInProgress(false)
+                Toast.makeText(this, "Cuenta creada exitosamente", Toast.LENGTH_SHORT).show()
+
+                val intent = Intent(this, HomeActivity::class.java)
+                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                startActivity(intent)
+                finish()
+            }
+            .addOnFailureListener { error ->
+                setRegisterInProgress(false)
+                Toast.makeText(
+                    this,
+                    "Error al guardar datos: ${error.localizedMessage}",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+    }
+
+    private fun clearErrors() {
+        nameEditText.error = null
+        emailEditText.error = null
+        passwordEditText.error = null
+        confirmPasswordEditText.error = null
+    }
+
+    private fun setRegisterInProgress(inProgress: Boolean) {
+        isRegistering = inProgress
+        registerButton.isEnabled = !inProgress
+        backToLoginButton.isEnabled = !inProgress
+        registerButton.text = if (inProgress) "Creando cuenta..." else "Registrarse"
     }
 }

@@ -1,6 +1,9 @@
 package com.vapajomi.vapajomi
 
 import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -18,16 +21,21 @@ import android.os.Bundle
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.provider.ContactsContract
 import android.provider.MediaStore
 import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.widget.Button
 import android.telephony.SmsManager
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.NotificationCompat
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.google.firebase.auth.FirebaseAuth
@@ -49,9 +57,14 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private lateinit var welcomeText: TextView
     private lateinit var voiceResultText: TextView
-    private lateinit var logoutButton: android.widget.Button
+    private lateinit var detectButton: Button
+    private lateinit var helpButton: Button
+    private lateinit var emergencyButton: Button
+    private lateinit var logoutButton: Button
+    private lateinit var notificationManager: NotificationManager
     private lateinit var cameraManager: CameraManager
     private lateinit var audioManager: AudioManager
+    private lateinit var vibrator: Vibrator
     private var torchCameraId: String? = null
     private var isTorchEnabled = false
     private val spanishLocale: Locale = Locale.forLanguageTag("es-ES")
@@ -81,9 +94,19 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         database = FirebaseDatabase.getInstance()
         tts = TextToSpeech(this, this)
         audioManager = getSystemService(AudioManager::class.java)
+        notificationManager = getSystemService(NotificationManager::class.java)
+        vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            getSystemService(VibratorManager::class.java).defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            getSystemService(Vibrator::class.java)
+        }
 
         welcomeText = findViewById(R.id.welcomeText)
         voiceResultText = findViewById(R.id.voiceResultText)
+        detectButton = findViewById(R.id.detectButton)
+        helpButton = findViewById(R.id.helpButton)
+        emergencyButton = findViewById(R.id.emergencyButton)
         logoutButton = findViewById(R.id.logoutButton)
 
         voiceCommandListener = VoiceCommandListener(
@@ -121,9 +144,27 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
         loadUserName()
         initTorch()
+        setupReturnNotification()
+        requestNotificationPermissionIfNeeded()
 
         logoutButton.setOnClickListener {
             logout()
+        }
+
+        detectButton.setOnClickListener {
+            vibratePattern(longArrayOf(0, 80))
+            openObjectDetection()
+        }
+
+        helpButton.setOnClickListener {
+            vibratePattern(longArrayOf(0, 60))
+            speakAvailableCommands()
+        }
+
+        emergencyButton.setOnClickListener {
+            vibratePattern(longArrayOf(0, 120, 80, 120))
+            speak("Abriendo llamada de emergencia de Bogota")
+            makePhoneCall(EMERGENCY_NUMBER)
         }
 
         checkAndRequestPermissions()
@@ -248,10 +289,86 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
 
+    private fun setupReturnNotification() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                RETURN_CHANNEL_ID,
+                "Acceso rapido a VAPAJOMI",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Mantiene un acceso visible para regresar a VAPAJOMI"
+                setShowBadge(false)
+            }
+            notificationManager.createNotificationChannel(channel)
+        }
+
+        showReturnNotification()
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                notificationsRequestCode
+            )
+        }
+    }
+
+    private fun showReturnNotification() {
+        if (!::notificationManager.isInitialized) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+
+        val returnIntent = Intent(this, HomeActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            RETURN_NOTIFICATION_ID,
+            returnIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = NotificationCompat.Builder(this, RETURN_CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("VAPAJOMI activo")
+            .setContentText("Toca aqui para volver a la aplicacion")
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .build()
+
+        notificationManager.notify(RETURN_NOTIFICATION_ID, notification)
+    }
+
     private fun handleVoiceCommand(rawCommand: String) {
         val command = normalizeCommand(rawCommand)
         val smsCommand = parseSmsCommand(command)
-        val callTarget = extractCommandTarget(command, listOf("llamar a ", "llama a "))
+        val whatsAppCommand = parseWhatsAppCommand(command)
+        val callTarget = extractCommandTarget(
+            command,
+            listOf(
+                "llamar a ",
+                "llama a ",
+                "hacer llamada a ",
+                "haz una llamada a ",
+                "marca a ",
+                "marcar a ",
+                "telefonea a "
+            )
+        )
         val navigationTarget = extractCommandTarget(
             command,
             listOf("navegar a ", "llevame a ", "ir a ", "dirigete a ", "dirijete a ", "llevame hacia ")
@@ -271,6 +388,16 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         when {
             command == "ayuda" || command.contains("que puedes hacer") || command.contains("comandos") -> {
                 speakAvailableCommands()
+            }
+
+            command == "repite" || command == "repetir" || command.contains("repite lo ultimo") -> {
+                speak(voiceResultText.text.toString())
+            }
+
+            command == "detener" || command == "callate" || command == "cancelar" -> {
+                tts.stop()
+                voiceResultText.text = "Audio detenido. Di Activate para continuar"
+                mainHandler.postDelayed({ startWakeWordListening() }, 600)
             }
 
             command.contains("enciende la linterna") ||
@@ -316,7 +443,10 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 command.contains("que tengo al frente") ||
                 command.contains("dime que hay al frente mio") ||
                 command.contains("analiza lo que tengo al frente") ||
-                command.contains("mira al frente") -> {
+                command.contains("mira al frente") ||
+                command.contains("detectar entorno") ||
+                command.contains("detector de objetos") ||
+                command.contains("asistente visual") -> {
                 openObjectDetection()
             }
 
@@ -360,16 +490,30 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 openSettings(Settings.ACTION_BLUETOOTH_SETTINGS)
             }
 
-            command.contains("llamar emergencia") || command.contains("llama a emergencia") -> {
-                makePhoneCall("911")
+            command.contains("llamar emergencia") ||
+                command.contains("llama a emergencia") ||
+                command.contains("emergencia") ||
+                command.contains("auxilio") ||
+                command.contains("llamar al 123") ||
+                command.contains("linea 123") -> {
+                vibratePattern(longArrayOf(0, 120, 80, 120))
+                makePhoneCall(EMERGENCY_NUMBER)
             }
 
             callTarget != null -> {
                 makePhoneCall(callTarget)
             }
 
+            whatsAppCommand != null -> {
+                sendWhatsAppMessage(whatsAppCommand.first, whatsAppCommand.second)
+            }
+
             smsCommand != null -> {
                 sendSmsToTarget(smsCommand.first, smsCommand.second)
+            }
+
+            command.contains("abrir instagram") || command == "instagram" -> {
+                openAppByPackage("com.instagram.android", "Instagram")
             }
 
             command.contains("abrir whatsapp") -> {
@@ -397,9 +541,10 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private fun speakAvailableCommands() {
         speak(
             "Puedes decir: enciende o apaga la linterna, llamar a un contacto o numero, " +
-                "enviar mensaje a alguien, donde estoy, navegar a un destino, dirigete a un destino, guiame a un destino, " +
-                "dime que hay al frente mio, detectar obstaculos, abrir camara, abrir mapas, abrir ajustes, " +
-                "subir o bajar volumen, silencio, hora, fecha y bateria."
+                "enviar mensaje a alguien, enviar whatsapp a alguien diciendo el mensaje, abrir Instagram, " +
+                "donde estoy, navegar a un destino, dirigete a un destino, guiame a un destino, " +
+                "dime que hay al frente mio, detectar obstaculos, abrir camara, abrir mapas, abrir WhatsApp, abrir ajustes, " +
+                "subir o bajar volumen, silencio, hora, fecha, bateria, emergencia en Bogota, repetir y detener."
         )
     }
 
@@ -413,9 +558,28 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         if (!command.startsWith("enviar mensaje a ")) return null
 
         val rest = command.removePrefix("enviar mensaje a ").trim()
+        return parseMessageTargetAndBody(rest)
+    }
+
+    private fun parseWhatsAppCommand(command: String): Pair<String, String>? {
+        val prefix = listOf(
+            "enviar whatsapp a ",
+            "enviar mensaje por whatsapp a ",
+            "mandar whatsapp a ",
+            "manda whatsapp a ",
+            "escribir whatsapp a ",
+            "escribe whatsapp a ",
+            "whatsapp a "
+        ).firstOrNull { command.startsWith(it) } ?: return null
+
+        val rest = command.removePrefix(prefix).trim()
+        return parseMessageTargetAndBody(rest)
+    }
+
+    private fun parseMessageTargetAndBody(rest: String): Pair<String, String>? {
         if (rest.isBlank()) return null
 
-        val separators = listOf(" diciendo ", " que diga ", " mensaje ")
+        val separators = listOf(" diciendo ", " que diga ", " con el mensaje ", " mensaje ", " texto ")
         for (separator in separators) {
             val index = rest.indexOf(separator)
             if (index > 0) {
@@ -452,6 +616,7 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         try {
             cameraManager.setTorchMode(cameraId, enabled)
             isTorchEnabled = enabled
+            vibratePattern(longArrayOf(0, 60))
             speak(if (enabled) "Linterna encendida" else "Linterna apagada")
         } catch (_: CameraAccessException) {
             speak("No pude cambiar el estado de la linterna")
@@ -474,6 +639,7 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         val intent = Intent(action, Uri.parse("tel:$phone"))
 
         try {
+            showReturnNotification()
             startActivity(intent)
             if (hasPermission) {
                 speak("Llamando a $target")
@@ -516,6 +682,35 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             speak("Mensaje enviado a $target")
         } catch (_: Exception) {
             speak("No pude enviar el mensaje")
+        }
+    }
+
+    private fun sendWhatsAppMessage(target: String, message: String) {
+        val phone = resolvePhoneTarget(target)
+        if (phone == null) {
+            speak("No encontre el numero de $target para enviar WhatsApp")
+            return
+        }
+
+        val cleanPhone = phone.filter { it.isDigit() }
+        if (cleanPhone.length < 7) {
+            speak("El numero de $target no parece valido para WhatsApp")
+            return
+        }
+
+        val whatsappUri = Uri.parse(
+            "https://wa.me/$cleanPhone?text=${Uri.encode(message)}"
+        )
+        val intent = Intent(Intent.ACTION_VIEW, whatsappUri).apply {
+            setPackage("com.whatsapp")
+        }
+
+        try {
+            showReturnNotification()
+            startActivity(intent)
+            speak("Abriendo WhatsApp para enviar mensaje a $target")
+        } catch (_: ActivityNotFoundException) {
+            speak("No encontre WhatsApp instalado")
         }
     }
 
@@ -604,6 +799,7 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private fun openCamera() {
         val intent = Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA)
         try {
+            showReturnNotification()
             startActivity(intent)
             speak("Abriendo camara")
         } catch (_: ActivityNotFoundException) {
@@ -616,6 +812,7 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         intent.setPackage("com.google.android.apps.maps")
 
         try {
+            showReturnNotification()
             startActivity(intent)
             speak("Abriendo mapas")
         } catch (_: ActivityNotFoundException) {
@@ -635,6 +832,7 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
         if (mapsAvailable) {
             try {
+                showReturnNotification()
                 startActivity(mapsIntent)
                 speak("Iniciando guia a pie hacia $destination y activando camara de asistencia")
                 mainHandler.postDelayed({
@@ -707,6 +905,7 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private fun openSettings(action: String) {
         val intent = Intent(action)
         try {
+            showReturnNotification()
             startActivity(intent)
             speak("Abriendo ajustes")
         } catch (_: ActivityNotFoundException) {
@@ -721,8 +920,9 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             return
         }
 
+        showReturnNotification()
         startActivity(launchIntent)
-        speak("Abriendo $appName")
+        speak("Abriendo $appName. Para volver a VAPAJOMI, toca la notificacion activa.")
     }
 
     private fun checkAndRequestPermissions() {
@@ -780,6 +980,10 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 speak("Algunos permisos fueron denegados. Algunas funciones podrian no estar disponibles")
             }
         }
+
+        if (requestCode == notificationsRequestCode) {
+            showReturnNotification()
+        }
     }
 
     private fun logout() {
@@ -805,11 +1009,24 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         voiceCommandListener.stopListening()
         isWakeWordListening = false
         shouldResumeWakeListeningAfterSpeech = true
+        voiceResultText.text = text
         tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "vapajomi_tts")
+    }
+
+    private fun vibratePattern(pattern: LongArray) {
+        if (!::vibrator.isInitialized || !vibrator.hasVibrator()) return
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            vibrator.vibrate(VibrationEffect.createWaveform(pattern, -1))
+        } else {
+            @Suppress("DEPRECATION")
+            vibrator.vibrate(pattern, -1)
+        }
     }
 
     override fun onResume() {
         super.onResume()
+        showReturnNotification()
         if (!isAwaitingCommand && !tts.isSpeaking) {
             mainHandler.postDelayed({ startWakeWordListening() }, 600)
         }
@@ -825,5 +1042,12 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
 
         super.onDestroy()
+    }
+
+    companion object {
+        private const val RETURN_CHANNEL_ID = "vapajomi_return_channel"
+        private const val RETURN_NOTIFICATION_ID = 2001
+        private const val notificationsRequestCode = 101
+        private const val EMERGENCY_NUMBER = "123"
     }
 }

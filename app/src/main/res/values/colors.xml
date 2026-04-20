@@ -2,4 +2,12 @@
 <resources>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+    <color name="vapajomi_background">#050505</color>
+    <color name="vapajomi_surface">#121212</color>
+    <color name="vapajomi_primary">#00E676</color>
+    <color name="vapajomi_primary_dark">#00B248</color>
+    <color name="vapajomi_warning">#FFD600</color>
+    <color name="vapajomi_danger">#FF1744</color>
+    <color name="vapajomi_text">#FFFFFFFF</color>
+    <color name="vapajomi_text_secondary">#E0E0E0</color>
 </resources>

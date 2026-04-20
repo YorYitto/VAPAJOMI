@@ -2,14 +2,27 @@ package com.vapajomi.vapajomi
 
 import android.Manifest
 import android.content.ActivityNotFoundException
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Rect
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
+import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
+import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.TextToSpeech
 import android.util.Log
+import android.view.View
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
@@ -32,11 +45,12 @@ import com.google.mlkit.vision.objects.DetectedObject
 import com.google.mlkit.vision.objects.ObjectDetection
 import com.google.mlkit.vision.objects.ObjectDetector
 import com.google.mlkit.vision.objects.defaults.ObjectDetectorOptions
+import java.text.Normalizer
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
-class ObjectDetectionActivity : AppCompatActivity() {
+class ObjectDetectionActivity : AppCompatActivity(), SensorEventListener {
 
     private lateinit var viewFinder: PreviewView
     private lateinit var statusText: TextView
@@ -47,11 +61,20 @@ class ObjectDetectionActivity : AppCompatActivity() {
     private lateinit var tts: TextToSpeech
     private lateinit var labeler: ImageLabeler
     private lateinit var objectDetector: ObjectDetector
+    private lateinit var voiceCommandListener: VoiceCommandListener
+    private lateinit var sensorManager: SensorManager
+    private lateinit var vibrator: Vibrator
 
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var proximitySensor: Sensor? = null
     private var isProcessing = false
+    private var isVoiceListening = false
+    private var shouldResumeVoiceListeningAfterSpeech = false
+    private var isNearFromProximitySensor = false
     private var lastAnalysisTimestamp = 0L
     private var lastSpokenKey = ""
     private var lastSpokenAt = 0L
+    private var lastProximityAlertAt = 0L
     private var lastStatus = "Preparando camara..."
     private var navigationDestination: String? = null
 
@@ -68,6 +91,14 @@ class ObjectDetectionActivity : AppCompatActivity() {
         navigationDestination = intent.getStringExtra(EXTRA_NAVIGATION_DESTINATION)?.trim()?.takeIf { it.isNotEmpty() }
 
         cameraExecutor = Executors.newSingleThreadExecutor()
+        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            getSystemService(VibratorManager::class.java).defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            getSystemService(Vibrator::class.java)
+        }
+        proximitySensor = sensorManager.getDefaultSensor(Sensor.TYPE_PROXIMITY)
         objectDetector = ObjectDetection.getClient(
             ObjectDetectorOptions.Builder()
                 .setDetectorMode(ObjectDetectorOptions.STREAM_MODE)
@@ -82,11 +113,13 @@ class ObjectDetectionActivity : AppCompatActivity() {
         )
 
         initTTS()
+        initVoiceCommands()
         setupActions()
         updateInitialTexts()
 
         if (allPermissionsGranted()) {
             startCamera()
+            startVoiceCommandListening()
         } else {
             ActivityCompat.requestPermissions(
                 this,
@@ -100,17 +133,47 @@ class ObjectDetectionActivity : AppCompatActivity() {
         tts = TextToSpeech(this) { status ->
             if (status == TextToSpeech.SUCCESS) {
                 tts.language = Locale.forLanguageTag("es-ES")
+                tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                    override fun onStart(utteranceId: String?) = Unit
+
+                    override fun onDone(utteranceId: String?) {
+                        resumeVoiceListeningIfNeeded()
+                    }
+
+                    @Deprecated("Deprecated in Java")
+                    override fun onError(utteranceId: String?) {
+                        resumeVoiceListeningIfNeeded()
+                    }
+                })
                 speakOnce(
                     key = if (navigationDestination == null) "start_scan" else "start_assisted_navigation",
                     text = if (navigationDestination == null) {
-                        "Detector con ML Kit activo. Te avisare si encuentro obstaculos."
+                        "Detector con ML Kit activo. Te avisare si encuentro obstaculos y su distancia aproximada en metros. Di regresar para volver."
                     } else {
-                        "Modo navegacion asistida con ML Kit activo. Monitoreando obstaculos rumbo a $navigationDestination."
+                        "Modo navegacion asistida con ML Kit activo. Monitoreando obstaculos rumbo a $navigationDestination con distancia aproximada en metros. Di regresar para volver, o iniciar ruta para abrir indicaciones a pie."
                     },
                     minIntervalMs = 0L
                 )
             }
         }
+    }
+
+    private fun initVoiceCommands() {
+        voiceCommandListener = VoiceCommandListener(
+            context = this,
+            onResult = { text ->
+                runOnUiThread {
+                    isVoiceListening = false
+                    handleVoiceCommand(text)
+                }
+            },
+            onError = {
+                runOnUiThread {
+                    isVoiceListening = false
+                    mainHandler.postDelayed({ startVoiceCommandListening() }, VOICE_RETRY_DELAY_MS)
+                }
+            }
+        )
     }
 
     private fun setupActions() {
@@ -128,11 +191,77 @@ class ObjectDetectionActivity : AppCompatActivity() {
 
     private fun updateInitialTexts() {
         hintText.text = if (navigationDestination == null) {
-            "ML Kit esta analizando el entorno para identificar objetos y obstaculos."
+            "ML Kit analiza el entorno y estima distancias. Di \"regresar\" para volver."
         } else {
-            "ML Kit esta monitoreando obstaculos mientras te diriges a $navigationDestination."
+            "ML Kit monitorea obstaculos hacia $navigationDestination y estima distancias. Di \"iniciar ruta\" o \"regresar\"."
         }
         statusText.text = lastStatus
+    }
+
+    private fun handleVoiceCommand(rawCommand: String) {
+        val command = normalizeCommand(rawCommand)
+
+        when {
+            command == "regresar" ||
+                command == "volver" ||
+                command == "atras" ||
+                command.contains("regresar al inicio") ||
+                command.contains("volver atras") -> {
+                speakOnce("voice_return", "Regresando.", minIntervalMs = 0L)
+                mainHandler.postDelayed({ finish() }, 450)
+            }
+
+            command.contains("iniciar ruta") ||
+                command.contains("abrir ruta") ||
+                command.contains("abre ruta") ||
+                command.contains("indicaciones") ||
+                command.contains("abrir maps") ||
+                command.contains("abrir mapas") -> {
+                openRouteInGoogleMaps()
+                mainHandler.postDelayed({ startVoiceCommandListening() }, MAPS_RETURN_LISTEN_DELAY_MS)
+            }
+
+            command.contains("ayuda") || command.contains("comandos") -> {
+                speakOnce(
+                    key = "voice_help",
+                    text = "En esta pantalla puedes decir regresar para volver, o iniciar ruta para abrir Google Maps a pie. Las distancias son aproximadas.",
+                    minIntervalMs = 0L
+                )
+            }
+
+            else -> {
+                startVoiceCommandListening()
+            }
+        }
+    }
+
+    private fun normalizeCommand(text: String): String {
+        return Normalizer.normalize(text.lowercase(Locale.forLanguageTag("es-ES")), Normalizer.Form.NFD)
+            .replace("\\p{InCombiningDiacriticalMarks}+".toRegex(), "")
+            .replace("[^a-z0-9 ]".toRegex(), " ")
+            .replace("\\s+".toRegex(), " ")
+            .trim()
+    }
+
+    private fun startVoiceCommandListening() {
+        if (isFinishing || isDestroyed || isVoiceListening) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            return
+        }
+        if (::tts.isInitialized && tts.isSpeaking) {
+            shouldResumeVoiceListeningAfterSpeech = true
+            return
+        }
+
+        isVoiceListening = true
+        voiceCommandListener.startListening()
+    }
+
+    private fun resumeVoiceListeningIfNeeded() {
+        if (!shouldResumeVoiceListeningAfterSpeech) return
+
+        shouldResumeVoiceListeningAfterSpeech = false
+        mainHandler.postDelayed({ startVoiceCommandListening() }, VOICE_RESUME_DELAY_MS)
     }
 
     private fun startCamera() {
@@ -247,6 +376,10 @@ class ObjectDetectionActivity : AppCompatActivity() {
             AlertLevel.LOW -> "Veo ${detection.speechLabel}."
         }
 
+        if (detection.alertLevel == AlertLevel.HIGH) {
+            vibratePattern(longArrayOf(0, 140, 80, 140))
+        }
+
         val speakInterval = when (detection.alertLevel) {
             AlertLevel.HIGH -> OBSTACLE_SPEAK_INTERVAL_MS
             AlertLevel.MEDIUM -> NOTICE_SPEAK_INTERVAL_MS
@@ -298,12 +431,21 @@ class ObjectDetectionActivity : AppCompatActivity() {
 
         val baseResult = objectLabel ?: defaultObstacleResult(proximity)
         val escalatedLevel = escalateAlertLevel(baseResult.alertLevel, proximity)
+        val estimatedDistance = estimateDistanceMeters(
+            boundingBox = detectedObject.boundingBox,
+            frameHeight = frameHeight,
+            descriptor = baseResult.descriptor
+        )
+        val distanceLabel = estimatedDistance?.let { "a ${formatMeters(it)} metros aprox." }
+            ?: proximity.statusLabel
+        val speechDistanceLabel = estimatedDistance?.let { "a ${formatMeters(it)} metros aproximadamente" }
+            ?: proximity.speechLabel
 
         return baseResult.copy(
             alertLevel = escalatedLevel,
             confidence = maxOf(baseResult.confidence, proximity.baseConfidence),
-            distanceLabel = proximity.statusLabel,
-            speechDistanceLabel = proximity.speechLabel,
+            distanceLabel = distanceLabel,
+            speechDistanceLabel = speechDistanceLabel,
             trackingId = detectedObject.trackingId
         )
     }
@@ -316,7 +458,8 @@ class ObjectDetectionActivity : AppCompatActivity() {
             alertLevel = level,
             confidence = proximity.baseConfidence,
             distanceLabel = proximity.statusLabel,
-            speechDistanceLabel = proximity.speechLabel
+            speechDistanceLabel = proximity.speechLabel,
+            descriptor = null
         )
     }
 
@@ -363,10 +506,32 @@ class ObjectDetectionActivity : AppCompatActivity() {
         }
     }
 
+    private fun estimateDistanceMeters(
+        boundingBox: Rect,
+        frameHeight: Int,
+        descriptor: DetectionDescriptor?
+    ): Float? {
+        val realHeightMeters = descriptor?.averageHeightMeters ?: DEFAULT_OBJECT_HEIGHT_METERS
+        val boxHeightRatio = boundingBox.height().toFloat() / frameHeight.coerceAtLeast(1).toFloat()
+        if (boxHeightRatio <= 0.02f) return null
+
+        val estimated = (realHeightMeters * DISTANCE_CALIBRATION_FACTOR) / boxHeightRatio
+        return estimated.coerceIn(MIN_ESTIMATED_DISTANCE_METERS, MAX_ESTIMATED_DISTANCE_METERS)
+    }
+
+    private fun formatMeters(distanceMeters: Float): String {
+        return if (distanceMeters < 10f) {
+            String.format(Locale.US, "%.1f", distanceMeters)
+        } else {
+            distanceMeters.toInt().toString()
+        }
+    }
+
     private fun showStatus(text: String) {
         lastStatus = text
         runOnUiThread {
             statusText.text = text
+            statusText.contentDescription = text
         }
     }
 
@@ -379,6 +544,11 @@ class ObjectDetectionActivity : AppCompatActivity() {
 
         lastSpokenKey = key
         lastSpokenAt = now
+        if (::voiceCommandListener.isInitialized) {
+            voiceCommandListener.stopListening()
+            isVoiceListening = false
+            shouldResumeVoiceListeningAfterSpeech = true
+        }
         tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, key)
     }
 
@@ -390,7 +560,7 @@ class ObjectDetectionActivity : AppCompatActivity() {
         }
 
         val routeUri = Uri.parse(
-            "https://www.google.com/maps/dir/?api=1&destination=${Uri.encode(destination)}&travelmode=walking"
+            "google.navigation:q=${Uri.encode(destination)}&mode=w"
         )
         val intent = Intent(Intent.ACTION_VIEW, routeUri).apply {
             setPackage("com.google.android.apps.maps")
@@ -399,10 +569,53 @@ class ObjectDetectionActivity : AppCompatActivity() {
         try {
             startActivity(intent)
             speakOnce("open_maps_route", "Abriendo ruta a pie en Google Maps.", minIntervalMs = 0L)
+            mainHandler.postDelayed({ bringDetectorBackToFront(destination) }, MAPS_TO_CAMERA_DELAY_MS)
         } catch (_: ActivityNotFoundException) {
             Toast.makeText(this, "Google Maps no esta disponible en este dispositivo.", Toast.LENGTH_SHORT).show()
         }
     }
+
+    private fun bringDetectorBackToFront(destination: String) {
+        if (isFinishing || isDestroyed) return
+
+        val returnIntent = Intent(this, ObjectDetectionActivity::class.java).apply {
+            putExtra(EXTRA_NAVIGATION_DESTINATION, destination)
+            addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        }
+        startActivity(returnIntent)
+    }
+
+    override fun onSensorChanged(event: SensorEvent) {
+        if (event.sensor.type != Sensor.TYPE_PROXIMITY) return
+
+        val maximumRange = event.sensor.maximumRange
+        val isNear = event.values.firstOrNull()?.let { value ->
+            value < maximumRange
+        } ?: false
+
+        if (!isNear) {
+            isNearFromProximitySensor = false
+            return
+        }
+
+        if (isNearFromProximitySensor) return
+
+        isNearFromProximitySensor = true
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastProximityAlertAt < PROXIMITY_SENSOR_ALERT_INTERVAL_MS) return
+
+        lastProximityAlertAt = now
+        showStatus("ALERTA: objeto muy cerca del sensor de proximidad.")
+        speakOnce(
+            key = "proximity_sensor_near",
+            text = "Atencion. Hay algo muy cerca del telefono.",
+            minIntervalMs = PROXIMITY_SENSOR_ALERT_INTERVAL_MS
+        )
+        vibratePattern(longArrayOf(0, 180, 80, 180, 80, 180))
+    }
+
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
 
     private fun allPermissionsGranted() = REQUIRED_PERMISSIONS.all {
         ContextCompat.checkSelfPermission(baseContext, it) == PackageManager.PERMISSION_GRANTED
@@ -417,14 +630,36 @@ class ObjectDetectionActivity : AppCompatActivity() {
         if (requestCode == REQUEST_CODE_PERMISSIONS) {
             if (allPermissionsGranted()) {
                 startCamera()
+                startVoiceCommandListening()
             } else {
-                Toast.makeText(this, "Permiso de camara denegado.", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Permisos de camara o microfono denegados.", Toast.LENGTH_SHORT).show()
                 finish()
             }
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        proximitySensor?.let { sensor ->
+            sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_NORMAL)
+        }
+        mainHandler.postDelayed({ startVoiceCommandListening() }, VOICE_RESUME_DELAY_MS)
+    }
+
+    override fun onPause() {
+        sensorManager.unregisterListener(this)
+        if (::voiceCommandListener.isInitialized) {
+            voiceCommandListener.stopListening()
+        }
+        isVoiceListening = false
+        super.onPause()
+    }
+
     override fun onDestroy() {
+        mainHandler.removeCallbacksAndMessages(null)
+        if (::voiceCommandListener.isInitialized) {
+            voiceCommandListener.destroy()
+        }
         if (::objectDetector.isInitialized) {
             objectDetector.close()
         }
@@ -439,11 +674,23 @@ class ObjectDetectionActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
+    private fun vibratePattern(pattern: LongArray) {
+        if (!::vibrator.isInitialized || !vibrator.hasVibrator()) return
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            vibrator.vibrate(VibrationEffect.createWaveform(pattern, -1))
+        } else {
+            @Suppress("DEPRECATION")
+            vibrator.vibrate(pattern, -1)
+        }
+    }
+
     private data class DetectionDescriptor(
         val statusLabel: String,
         val speechLabel: String,
         val alertLevel: AlertLevel,
-        val keywords: List<String> = emptyList()
+        val keywords: List<String> = emptyList(),
+        val averageHeightMeters: Float = DEFAULT_OBJECT_HEIGHT_METERS
     ) {
         fun toResult(confidence: Float): DetectionResult {
             return DetectionResult(
@@ -452,7 +699,8 @@ class ObjectDetectionActivity : AppCompatActivity() {
                 alertLevel = alertLevel,
                 confidence = confidence,
                 distanceLabel = ProximityLevel.FAR.statusLabel,
-                speechDistanceLabel = ProximityLevel.FAR.speechLabel
+                speechDistanceLabel = ProximityLevel.FAR.speechLabel,
+                descriptor = this
             )
         }
     }
@@ -464,6 +712,7 @@ class ObjectDetectionActivity : AppCompatActivity() {
         val confidence: Float,
         val distanceLabel: String,
         val speechDistanceLabel: String,
+        val descriptor: DetectionDescriptor?,
         val trackingId: Int? = null
     )
 
@@ -493,79 +742,88 @@ class ObjectDetectionActivity : AppCompatActivity() {
         private const val GENERAL_SPEAK_INTERVAL_MS = 6000L
         private const val NOTICE_SPEAK_INTERVAL_MS = 4200L
         private const val OBSTACLE_SPEAK_INTERVAL_MS = 2400L
-        private val REQUIRED_PERMISSIONS = arrayOf(Manifest.permission.CAMERA)
+        private const val PROXIMITY_SENSOR_ALERT_INTERVAL_MS = 2500L
+        private const val VOICE_RETRY_DELAY_MS = 900L
+        private const val VOICE_RESUME_DELAY_MS = 1000L
+        private const val MAPS_RETURN_LISTEN_DELAY_MS = 1800L
+        private const val MAPS_TO_CAMERA_DELAY_MS = 2600L
+        private const val DEFAULT_OBJECT_HEIGHT_METERS = 1.0f
+        private const val DISTANCE_CALIBRATION_FACTOR = 1.45f
+        private const val MIN_ESTIMATED_DISTANCE_METERS = 0.3f
+        private const val MAX_ESTIMATED_DISTANCE_METERS = 25f
+        private val REQUIRED_PERMISSIONS = arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
 
         private val exactDescriptorMap = mapOf(
-            "person" to DetectionDescriptor("persona", "una persona frente a ti", AlertLevel.HIGH),
-            "fashion goods" to DetectionDescriptor("objeto personal", "un objeto en el camino", AlertLevel.MEDIUM),
-            "food" to DetectionDescriptor("objeto pequeno", "un objeto pequeno", AlertLevel.MEDIUM),
+            "person" to DetectionDescriptor("persona", "una persona frente a ti", AlertLevel.HIGH, averageHeightMeters = 1.65f),
+            "fashion goods" to DetectionDescriptor("objeto personal", "un objeto en el camino", AlertLevel.MEDIUM, averageHeightMeters = 0.6f),
+            "food" to DetectionDescriptor("objeto pequeno", "un objeto pequeno", AlertLevel.MEDIUM, averageHeightMeters = 0.25f),
             "home goods" to DetectionDescriptor("objeto del entorno", "un objeto del entorno", AlertLevel.MEDIUM),
-            "place" to DetectionDescriptor("estructura", "una estructura", AlertLevel.LOW),
-            "places" to DetectionDescriptor("estructura", "una estructura", AlertLevel.LOW),
-            "plant" to DetectionDescriptor("planta", "una planta", AlertLevel.MEDIUM),
-            "plants" to DetectionDescriptor("planta", "una planta", AlertLevel.MEDIUM),
-            "man" to DetectionDescriptor("persona", "una persona frente a ti", AlertLevel.HIGH),
-            "woman" to DetectionDescriptor("persona", "una persona frente a ti", AlertLevel.HIGH),
-            "bicycle" to DetectionDescriptor("bicicleta", "una bicicleta", AlertLevel.HIGH),
-            "motorcycle" to DetectionDescriptor("motocicleta", "una motocicleta", AlertLevel.HIGH),
-            "car" to DetectionDescriptor("vehiculo", "un vehiculo", AlertLevel.HIGH),
-            "bus" to DetectionDescriptor("bus", "un bus", AlertLevel.HIGH),
-            "truck" to DetectionDescriptor("camion", "un camion", AlertLevel.HIGH),
-            "stairs" to DetectionDescriptor("escaleras", "escaleras", AlertLevel.HIGH),
-            "step" to DetectionDescriptor("escalon", "un escalon", AlertLevel.HIGH),
-            "curb" to DetectionDescriptor("bordillo", "un bordillo", AlertLevel.HIGH),
-            "barrier" to DetectionDescriptor("barrera", "una barrera", AlertLevel.HIGH),
-            "cone" to DetectionDescriptor("cono", "un cono en el camino", AlertLevel.HIGH),
-            "pole" to DetectionDescriptor("poste", "un poste", AlertLevel.MEDIUM),
-            "tree" to DetectionDescriptor("arbol", "un arbol cercano", AlertLevel.MEDIUM),
-            "bench" to DetectionDescriptor("banco", "un banco", AlertLevel.MEDIUM),
-            "chair" to DetectionDescriptor("silla", "una silla", AlertLevel.MEDIUM),
-            "table" to DetectionDescriptor("mesa", "una mesa", AlertLevel.MEDIUM),
-            "desk" to DetectionDescriptor("escritorio", "un escritorio", AlertLevel.MEDIUM),
-            "bed" to DetectionDescriptor("cama", "una cama", AlertLevel.MEDIUM),
-            "couch" to DetectionDescriptor("sofa", "un sofa", AlertLevel.MEDIUM),
-            "sofa" to DetectionDescriptor("sofa", "un sofa", AlertLevel.MEDIUM),
-            "television" to DetectionDescriptor("televisor", "un televisor", AlertLevel.LOW),
-            "tv" to DetectionDescriptor("televisor", "un televisor", AlertLevel.LOW),
-            "monitor" to DetectionDescriptor("monitor", "un monitor", AlertLevel.LOW),
-            "screen" to DetectionDescriptor("pantalla", "una pantalla", AlertLevel.LOW),
-            "laptop" to DetectionDescriptor("portatil", "un portatil", AlertLevel.LOW),
-            "computer" to DetectionDescriptor("computador", "un computador", AlertLevel.LOW),
-            "door" to DetectionDescriptor("puerta", "una puerta", AlertLevel.LOW),
-            "building" to DetectionDescriptor("edificio", "un edificio", AlertLevel.LOW),
-            "crosswalk" to DetectionDescriptor("cruce peatonal", "un cruce peatonal", AlertLevel.MEDIUM),
-            "sidewalk" to DetectionDescriptor("anden", "el anden", AlertLevel.LOW),
-            "road" to DetectionDescriptor("via", "la via", AlertLevel.MEDIUM),
-            "street" to DetectionDescriptor("calle", "la calle", AlertLevel.MEDIUM),
-            "pothole" to DetectionDescriptor("hueco", "un hueco", AlertLevel.HIGH),
-            "divider" to DetectionDescriptor("separador", "un separador", AlertLevel.HIGH)
+            "place" to DetectionDescriptor("estructura", "una estructura", AlertLevel.LOW, averageHeightMeters = 2.2f),
+            "places" to DetectionDescriptor("estructura", "una estructura", AlertLevel.LOW, averageHeightMeters = 2.2f),
+            "plant" to DetectionDescriptor("planta", "una planta", AlertLevel.MEDIUM, averageHeightMeters = 0.9f),
+            "plants" to DetectionDescriptor("planta", "una planta", AlertLevel.MEDIUM, averageHeightMeters = 0.9f),
+            "man" to DetectionDescriptor("persona", "una persona frente a ti", AlertLevel.HIGH, averageHeightMeters = 1.7f),
+            "woman" to DetectionDescriptor("persona", "una persona frente a ti", AlertLevel.HIGH, averageHeightMeters = 1.6f),
+            "bicycle" to DetectionDescriptor("bicicleta", "una bicicleta", AlertLevel.HIGH, averageHeightMeters = 1.1f),
+            "motorcycle" to DetectionDescriptor("motocicleta", "una motocicleta", AlertLevel.HIGH, averageHeightMeters = 1.25f),
+            "car" to DetectionDescriptor("vehiculo", "un vehiculo", AlertLevel.HIGH, averageHeightMeters = 1.45f),
+            "bus" to DetectionDescriptor("bus", "un bus", AlertLevel.HIGH, averageHeightMeters = 3.0f),
+            "truck" to DetectionDescriptor("camion", "un camion", AlertLevel.HIGH, averageHeightMeters = 3.2f),
+            "stairs" to DetectionDescriptor("escaleras", "escaleras", AlertLevel.HIGH, averageHeightMeters = 0.6f),
+            "step" to DetectionDescriptor("escalon", "un escalon", AlertLevel.HIGH, averageHeightMeters = 0.18f),
+            "curb" to DetectionDescriptor("bordillo", "un bordillo", AlertLevel.HIGH, averageHeightMeters = 0.18f),
+            "barrier" to DetectionDescriptor("barrera", "una barrera", AlertLevel.HIGH, averageHeightMeters = 1.0f),
+            "cone" to DetectionDescriptor("cono", "un cono en el camino", AlertLevel.HIGH, averageHeightMeters = 0.75f),
+            "pole" to DetectionDescriptor("poste", "un poste", AlertLevel.MEDIUM, averageHeightMeters = 2.2f),
+            "tree" to DetectionDescriptor("arbol", "un arbol cercano", AlertLevel.MEDIUM, averageHeightMeters = 3.0f),
+            "bench" to DetectionDescriptor("banco", "un banco", AlertLevel.MEDIUM, averageHeightMeters = 0.8f),
+            "chair" to DetectionDescriptor("silla", "una silla", AlertLevel.MEDIUM, averageHeightMeters = 0.9f),
+            "table" to DetectionDescriptor("mesa", "una mesa", AlertLevel.MEDIUM, averageHeightMeters = 0.75f),
+            "desk" to DetectionDescriptor("escritorio", "un escritorio", AlertLevel.MEDIUM, averageHeightMeters = 0.75f),
+            "bed" to DetectionDescriptor("cama", "una cama", AlertLevel.MEDIUM, averageHeightMeters = 0.55f),
+            "couch" to DetectionDescriptor("sofa", "un sofa", AlertLevel.MEDIUM, averageHeightMeters = 0.9f),
+            "sofa" to DetectionDescriptor("sofa", "un sofa", AlertLevel.MEDIUM, averageHeightMeters = 0.9f),
+            "television" to DetectionDescriptor("televisor", "un televisor", AlertLevel.LOW, averageHeightMeters = 0.7f),
+            "tv" to DetectionDescriptor("televisor", "un televisor", AlertLevel.LOW, averageHeightMeters = 0.7f),
+            "monitor" to DetectionDescriptor("monitor", "un monitor", AlertLevel.LOW, averageHeightMeters = 0.45f),
+            "screen" to DetectionDescriptor("pantalla", "una pantalla", AlertLevel.LOW, averageHeightMeters = 0.55f),
+            "laptop" to DetectionDescriptor("portatil", "un portatil", AlertLevel.LOW, averageHeightMeters = 0.25f),
+            "computer" to DetectionDescriptor("computador", "un computador", AlertLevel.LOW, averageHeightMeters = 0.5f),
+            "door" to DetectionDescriptor("puerta", "una puerta", AlertLevel.LOW, averageHeightMeters = 2.0f),
+            "building" to DetectionDescriptor("edificio", "un edificio", AlertLevel.LOW, averageHeightMeters = 3.0f),
+            "crosswalk" to DetectionDescriptor("cruce peatonal", "un cruce peatonal", AlertLevel.MEDIUM, averageHeightMeters = 0.05f),
+            "sidewalk" to DetectionDescriptor("anden", "el anden", AlertLevel.LOW, averageHeightMeters = 0.12f),
+            "road" to DetectionDescriptor("via", "la via", AlertLevel.MEDIUM, averageHeightMeters = 0.05f),
+            "street" to DetectionDescriptor("calle", "la calle", AlertLevel.MEDIUM, averageHeightMeters = 0.05f),
+            "pothole" to DetectionDescriptor("hueco", "un hueco", AlertLevel.HIGH, averageHeightMeters = 0.08f),
+            "divider" to DetectionDescriptor("separador", "un separador", AlertLevel.HIGH, averageHeightMeters = 0.35f)
         )
 
         private val keywordDescriptors = listOf(
-            DetectionDescriptor("persona", "una persona frente a ti", AlertLevel.HIGH, listOf("person", "people", "pedestrian")),
-            DetectionDescriptor("vehiculo", "un vehiculo", AlertLevel.HIGH, listOf("vehicle", "car", "truck", "bus", "van")),
-            DetectionDescriptor("bicicleta", "una bicicleta", AlertLevel.HIGH, listOf("bike", "bicycle", "cycl")),
-            DetectionDescriptor("motocicleta", "una motocicleta", AlertLevel.HIGH, listOf("motorcycle", "scooter")),
-            DetectionDescriptor("escaleras", "escaleras", AlertLevel.HIGH, listOf("stair", "step", "stairs")),
-            DetectionDescriptor("bordillo", "un bordillo", AlertLevel.HIGH, listOf("curb", "ledge")),
-            DetectionDescriptor("hueco", "un hueco", AlertLevel.HIGH, listOf("hole", "pothole", "drain")),
-            DetectionDescriptor("separador", "un separador", AlertLevel.HIGH, listOf("divider", "median", "separator")),
-            DetectionDescriptor("barrera", "una barrera", AlertLevel.HIGH, listOf("barrier", "fence", "gate")),
-            DetectionDescriptor("cono", "un cono en el camino", AlertLevel.HIGH, listOf("cone", "bollard")),
-            DetectionDescriptor("poste", "un poste", AlertLevel.MEDIUM, listOf("pole", "column", "sign")),
-            DetectionDescriptor("arbol", "un arbol cercano", AlertLevel.MEDIUM, listOf("tree", "branch")),
-            DetectionDescriptor("banco", "un banco", AlertLevel.MEDIUM, listOf("bench", "seat")),
-            DetectionDescriptor("silla", "una silla", AlertLevel.MEDIUM, listOf("chair", "stool")),
-            DetectionDescriptor("mesa", "una mesa", AlertLevel.MEDIUM, listOf("table", "desk")),
-            DetectionDescriptor("cama", "una cama", AlertLevel.MEDIUM, listOf("bed", "mattress", "pillow")),
-            DetectionDescriptor("sofa", "un sofa", AlertLevel.MEDIUM, listOf("couch", "sofa")),
-            DetectionDescriptor("televisor", "un televisor", AlertLevel.LOW, listOf("tv", "television")),
-            DetectionDescriptor("monitor", "un monitor", AlertLevel.LOW, listOf("monitor", "display", "screen")),
-            DetectionDescriptor("portatil", "un portatil", AlertLevel.LOW, listOf("laptop", "notebook", "computer", "pc")),
-            DetectionDescriptor("calle", "la calle", AlertLevel.MEDIUM, listOf("street", "road", "traffic")),
-            DetectionDescriptor("anden", "el anden", AlertLevel.LOW, listOf("sidewalk", "walkway", "path")),
-            DetectionDescriptor("puerta", "una puerta", AlertLevel.LOW, listOf("door", "entrance")),
-            DetectionDescriptor("edificio", "un edificio", AlertLevel.LOW, listOf("building", "house", "store"))
+            DetectionDescriptor("persona", "una persona frente a ti", AlertLevel.HIGH, listOf("person", "people", "pedestrian"), 1.65f),
+            DetectionDescriptor("vehiculo", "un vehiculo", AlertLevel.HIGH, listOf("vehicle", "car", "truck", "bus", "van"), 1.6f),
+            DetectionDescriptor("bicicleta", "una bicicleta", AlertLevel.HIGH, listOf("bike", "bicycle", "cycl"), 1.1f),
+            DetectionDescriptor("motocicleta", "una motocicleta", AlertLevel.HIGH, listOf("motorcycle", "scooter"), 1.25f),
+            DetectionDescriptor("escaleras", "escaleras", AlertLevel.HIGH, listOf("stair", "step", "stairs"), 0.6f),
+            DetectionDescriptor("bordillo", "un bordillo", AlertLevel.HIGH, listOf("curb", "ledge"), 0.18f),
+            DetectionDescriptor("hueco", "un hueco", AlertLevel.HIGH, listOf("hole", "pothole", "drain"), 0.08f),
+            DetectionDescriptor("separador", "un separador", AlertLevel.HIGH, listOf("divider", "median", "separator"), 0.35f),
+            DetectionDescriptor("barrera", "una barrera", AlertLevel.HIGH, listOf("barrier", "fence", "gate"), 1.0f),
+            DetectionDescriptor("cono", "un cono en el camino", AlertLevel.HIGH, listOf("cone", "bollard"), 0.75f),
+            DetectionDescriptor("poste", "un poste", AlertLevel.MEDIUM, listOf("pole", "column", "sign"), 2.2f),
+            DetectionDescriptor("arbol", "un arbol cercano", AlertLevel.MEDIUM, listOf("tree", "branch"), 3.0f),
+            DetectionDescriptor("banco", "un banco", AlertLevel.MEDIUM, listOf("bench", "seat"), 0.8f),
+            DetectionDescriptor("silla", "una silla", AlertLevel.MEDIUM, listOf("chair", "stool"), 0.9f),
+            DetectionDescriptor("mesa", "una mesa", AlertLevel.MEDIUM, listOf("table", "desk"), 0.75f),
+            DetectionDescriptor("cama", "una cama", AlertLevel.MEDIUM, listOf("bed", "mattress", "pillow"), 0.55f),
+            DetectionDescriptor("sofa", "un sofa", AlertLevel.MEDIUM, listOf("couch", "sofa"), 0.9f),
+            DetectionDescriptor("televisor", "un televisor", AlertLevel.LOW, listOf("tv", "television"), 0.7f),
+            DetectionDescriptor("monitor", "un monitor", AlertLevel.LOW, listOf("monitor", "display", "screen"), 0.45f),
+            DetectionDescriptor("portatil", "un portatil", AlertLevel.LOW, listOf("laptop", "notebook", "computer", "pc"), 0.3f),
+            DetectionDescriptor("calle", "la calle", AlertLevel.MEDIUM, listOf("street", "road", "traffic"), 0.05f),
+            DetectionDescriptor("anden", "el anden", AlertLevel.LOW, listOf("sidewalk", "walkway", "path"), 0.12f),
+            DetectionDescriptor("puerta", "una puerta", AlertLevel.LOW, listOf("door", "entrance"), 2.0f),
+            DetectionDescriptor("edificio", "un edificio", AlertLevel.LOW, listOf("building", "house", "store"), 3.0f)
         )
     }
 }
