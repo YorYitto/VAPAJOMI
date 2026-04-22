@@ -1,98 +1,48 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/vapajomi_background"
-    android:fillViewport="true">
+    android:background="#F5F5F5"
+    android:gravity="center"
+    android:orientation="vertical"
+    android:padding="32dp">
 
-    <LinearLayout
+    <TextView
+        android:id="@+id/welcomeText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="40dp"
+        android:text="Bienvenido"
+        android:textColor="#02B126"
+        android:textSize="32sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="24dp"
+        android:text="En que puedo ayudarte?"
+        android:textColor="#757575"
+        android:textSize="20sp" />
+
+    <TextView
+        android:id="@+id/voiceResultText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:gravity="center_horizontal"
-        android:orientation="vertical"
-        android:padding="24dp">
+        android:layout_marginBottom="36dp"
+        android:gravity="center"
+        android:text="Di 'Activate' para comenzar"
+        android:textColor="#333333"
+        android:textSize="16sp" />
 
-        <TextView
-            android:id="@+id/welcomeText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:layout_marginBottom="20dp"
-            android:gravity="center"
-            android:text="Bienvenido"
-            android:textColor="@color/vapajomi_primary"
-            android:textSize="34sp"
-            android:textStyle="bold" />
+    <Button
+        android:id="@+id/logoutButton"
+        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+        android:layout_width="match_parent"
+        android:layout_height="60dp"
+        android:text="Cerrar sesion"
+        android:textColor="#02B126"
+        android:textSize="16sp"
+        android:textStyle="bold" />
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="18dp"
-            android:gravity="center"
-            android:text="Di Activate o toca una accion"
-            android:textColor="@color/vapajomi_text_secondary"
-            android:textSize="22sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/voiceResultText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="24dp"
-            android:background="@color/vapajomi_surface"
-            android:gravity="center"
-            android:minHeight="96dp"
-            android:padding="18dp"
-            android:text="Di 'Activate' para comenzar"
-            android:textColor="@color/vapajomi_text"
-            android:textSize="22sp"
-            android:textStyle="bold" />
-
-        <Button
-            android:id="@+id/detectButton"
-            android:layout_width="match_parent"
-            android:layout_height="72dp"
-            android:layout_marginBottom="14dp"
-            android:backgroundTint="@color/vapajomi_primary"
-            android:contentDescription="Abrir detector de objetos y obstaculos"
-            android:text="Detectar entorno"
-            android:textColor="@color/black"
-            android:textSize="20sp"
-            android:textStyle="bold" />
-
-        <Button
-            android:id="@+id/helpButton"
-            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-            android:layout_width="match_parent"
-            android:layout_height="72dp"
-            android:layout_marginBottom="14dp"
-            android:contentDescription="Escuchar comandos disponibles"
-            android:text="Ayuda por voz"
-            android:textColor="@color/vapajomi_primary"
-            android:textSize="20sp"
-            android:textStyle="bold" />
-
-        <Button
-            android:id="@+id/emergencyButton"
-            android:layout_width="match_parent"
-            android:layout_height="72dp"
-            android:layout_marginBottom="14dp"
-            android:backgroundTint="@color/vapajomi_danger"
-            android:contentDescription="Llamar a emergencias"
-            android:text="Emergencia"
-            android:textColor="@color/white"
-            android:textSize="20sp"
-            android:textStyle="bold" />
-
-        <Button
-            android:id="@+id/logoutButton"
-            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-            android:layout_width="match_parent"
-            android:layout_height="64dp"
-            android:contentDescription="Cerrar sesion"
-            android:text="Cerrar sesion"
-            android:textColor="@color/vapajomi_text_secondary"
-            android:textSize="18sp"
-            android:textStyle="bold" />
-    </LinearLayout>
-</ScrollView>
+</LinearLayout>

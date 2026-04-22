@@ -22,9 +22,9 @@
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_margin="16dp"
-        android:background="#D9000000"
+        android:background="#B2000000"
         android:orientation="vertical"
-        android:padding="18dp"
+        android:padding="16dp"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent">
@@ -34,9 +34,8 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Escaneando el entorno..."
-            android:textColor="@color/vapajomi_text"
-            android:textSize="18sp"
-            android:textStyle="bold" />
+            android:textColor="@android:color/white"
+            android:textSize="15sp" />
 
         <TextView
             android:id="@+id/statusText"
@@ -44,8 +43,8 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="10dp"
             android:text="Preparando camara..."
-            android:textColor="@color/vapajomi_warning"
-            android:textSize="24sp"
+            android:textColor="@android:color/white"
+            android:textSize="20sp"
             android:textStyle="bold" />
     </LinearLayout>
 
@@ -64,23 +63,20 @@
         <Button
             android:id="@+id/openRouteButton"
             android:layout_width="0dp"
-            android:layout_height="72dp"
+            android:layout_height="wrap_content"
             android:layout_marginEnd="8dp"
             android:layout_weight="1"
             android:contentDescription="Abrir ruta en Google Maps"
-            android:text="Abrir ruta"
-            android:textSize="18sp"
-            android:textStyle="bold" />
+            android:text="Abrir ruta" />
 
         <Button
             android:id="@+id/closeButton"
             android:layout_width="0dp"
-            android:layout_height="72dp"
+            android:layout_height="wrap_content"
             android:layout_marginStart="8dp"
             android:layout_weight="1"
             android:contentDescription="Cerrar detector y volver al inicio"
-            android:text="Cerrar"
-            android:textSize="18sp"
-            android:textStyle="bold" />
+            android:text="Cerrar" />
     </LinearLayout>
+
 </androidx.constraintlayout.widget.ConstraintLayout>

@@ -108,7 +108,7 @@ class ObjectDetectionActivity : AppCompatActivity(), SensorEventListener {
         )
         labeler = ImageLabeling.getClient(
             ImageLabelerOptions.Builder()
-                .setConfidenceThreshold(MIN_CONFIDENCE)
+                .setConfidenceThreshold(MIN_LABEL_CONFIDENCE)
                 .build()
         )
 
@@ -343,18 +343,28 @@ class ObjectDetectionActivity : AppCompatActivity(), SensorEventListener {
         frameWidth: Int,
         frameHeight: Int
     ) {
-        val dominantObject = objects.maxByOrNull { boundingBoxArea(it.boundingBox) }
+        val dominantObject = objects.maxByOrNull { detectedObject ->
+            collisionScore(detectedObject.boundingBox, frameWidth, frameHeight)
+        }
         val objectDetection = dominantObject?.let { detectedObject ->
             buildDetectionFromObject(detectedObject, frameWidth, frameHeight)
         }
 
-        val labelDetection = labels
+        val rawLabelDetection = labels
             .sortedByDescending { it.confidence }
             .mapNotNull { mapImageLabel(it) }
             .maxWithOrNull(
                 compareBy<DetectionResult> { it.alertLevel.priority }
                     .thenBy { it.confidence }
             )
+        val labelDetection = rawLabelDetection?.let { detection ->
+            dominantObject?.let { detectedObject ->
+                detection.withEstimatedDistanceFrom(
+                    boundingBox = detectedObject.boundingBox,
+                    frameHeight = frameHeight
+                )
+            } ?: detection
+        }
 
         val detection = chooseDetection(objectDetection, labelDetection)
         if (detection == null) {
@@ -373,7 +383,7 @@ class ObjectDetectionActivity : AppCompatActivity(), SensorEventListener {
         val speech = when (detection.alertLevel) {
             AlertLevel.HIGH -> "Atencion. ${detection.speechLabel} ${detection.speechDistanceLabel}. Reduce la velocidad."
             AlertLevel.MEDIUM -> "Precaucion. Detecte ${detection.speechLabel} ${detection.speechDistanceLabel}."
-            AlertLevel.LOW -> "Veo ${detection.speechLabel}."
+            AlertLevel.LOW -> "Veo ${detection.speechLabel} ${detection.speechDistanceLabel}."
         }
 
         if (detection.alertLevel == AlertLevel.HIGH) {
@@ -418,6 +428,22 @@ class ObjectDetectionActivity : AppCompatActivity(), SensorEventListener {
         }
     }
 
+    private fun DetectionResult.withEstimatedDistanceFrom(
+        boundingBox: Rect,
+        frameHeight: Int
+    ): DetectionResult {
+        val estimatedDistance = estimateDistanceMeters(
+            boundingBox = boundingBox,
+            frameHeight = frameHeight,
+            descriptor = descriptor
+        ) ?: return this
+
+        return copy(
+            distanceLabel = "a ${formatMeters(estimatedDistance)} metros aprox.",
+            speechDistanceLabel = "a ${formatMeters(estimatedDistance)} metros aproximadamente"
+        )
+    }
+
     private fun buildDetectionFromObject(
         detectedObject: DetectedObject,
         frameWidth: Int,
@@ -425,16 +451,22 @@ class ObjectDetectionActivity : AppCompatActivity(), SensorEventListener {
     ): DetectionResult {
         val ratio = calculateAreaRatio(detectedObject.boundingBox, frameWidth, frameHeight)
         val proximity = proximityFromRatio(ratio)
+        val pathPosition = pathPositionFromBoundingBox(detectedObject.boundingBox, frameWidth)
         val objectLabel = detectedObject.labels
             .mapNotNull { mapObjectLabel(it.text, it.confidence) }
             .maxByOrNull { it.confidence }
 
-        val baseResult = objectLabel ?: defaultObstacleResult(proximity)
-        val escalatedLevel = escalateAlertLevel(baseResult.alertLevel, proximity)
+        val baseResult = objectLabel ?: defaultObstacleResult(proximity, pathPosition)
         val estimatedDistance = estimateDistanceMeters(
             boundingBox = detectedObject.boundingBox,
             frameHeight = frameHeight,
             descriptor = baseResult.descriptor
+        )
+        val escalatedLevel = escalateAlertLevel(
+            level = baseResult.alertLevel,
+            proximity = proximity,
+            pathPosition = pathPosition,
+            estimatedDistanceMeters = estimatedDistance
         )
         val distanceLabel = estimatedDistance?.let { "a ${formatMeters(it)} metros aprox." }
             ?: proximity.statusLabel
@@ -444,17 +476,26 @@ class ObjectDetectionActivity : AppCompatActivity(), SensorEventListener {
         return baseResult.copy(
             alertLevel = escalatedLevel,
             confidence = maxOf(baseResult.confidence, proximity.baseConfidence),
+            statusLabel = applyPathPosition(baseResult.statusLabel, pathPosition),
+            speechLabel = applyPathPosition(baseResult.speechLabel, pathPosition),
             distanceLabel = distanceLabel,
             speechDistanceLabel = speechDistanceLabel,
             trackingId = detectedObject.trackingId
         )
     }
 
-    private fun defaultObstacleResult(proximity: ProximityLevel): DetectionResult {
-        val level = if (proximity == ProximityLevel.NEAR) AlertLevel.HIGH else AlertLevel.MEDIUM
+    private fun defaultObstacleResult(
+        proximity: ProximityLevel,
+        pathPosition: PathPosition
+    ): DetectionResult {
+        val level = when {
+            pathPosition == PathPosition.CENTER -> AlertLevel.HIGH
+            proximity == ProximityLevel.NEAR -> AlertLevel.HIGH
+            else -> AlertLevel.MEDIUM
+        }
         return DetectionResult(
-            statusLabel = "objeto detectado",
-            speechLabel = "un objeto frente a ti",
+            statusLabel = "obstaculo detectado",
+            speechLabel = "un obstaculo",
             alertLevel = level,
             confidence = proximity.baseConfidence,
             distanceLabel = proximity.statusLabel,
@@ -463,8 +504,16 @@ class ObjectDetectionActivity : AppCompatActivity(), SensorEventListener {
         )
     }
 
-    private fun escalateAlertLevel(level: AlertLevel, proximity: ProximityLevel): AlertLevel {
+    private fun escalateAlertLevel(
+        level: AlertLevel,
+        proximity: ProximityLevel,
+        pathPosition: PathPosition,
+        estimatedDistanceMeters: Float?
+    ): AlertLevel {
         return when {
+            pathPosition == PathPosition.CENTER && estimatedDistanceMeters != null &&
+                estimatedDistanceMeters <= COLLISION_DISTANCE_METERS -> AlertLevel.HIGH
+            pathPosition == PathPosition.CENTER && proximity != ProximityLevel.FAR -> AlertLevel.HIGH
             proximity == ProximityLevel.NEAR -> AlertLevel.HIGH
             level == AlertLevel.HIGH -> AlertLevel.HIGH
             proximity == ProximityLevel.MEDIUM && level == AlertLevel.LOW -> AlertLevel.MEDIUM
@@ -493,6 +542,17 @@ class ObjectDetectionActivity : AppCompatActivity(), SensorEventListener {
 
     private fun boundingBoxArea(rect: Rect): Int = rect.width() * rect.height()
 
+    private fun collisionScore(rect: Rect, frameWidth: Int, frameHeight: Int): Float {
+        val areaRatio = calculateAreaRatio(rect, frameWidth, frameHeight)
+        val centerBonus = when (pathPositionFromBoundingBox(rect, frameWidth)) {
+            PathPosition.CENTER -> 2.6f
+            PathPosition.LEFT, PathPosition.RIGHT -> 1.2f
+        }
+        val lowerFrameBonus = if (rect.centerY() > frameHeight * 0.42f) 1.4f else 1f
+        val heightRatio = rect.height().toFloat() / frameHeight.coerceAtLeast(1).toFloat()
+        return (areaRatio * centerBonus * lowerFrameBonus) + (heightRatio * 0.35f)
+    }
+
     private fun calculateAreaRatio(rect: Rect, frameWidth: Int, frameHeight: Int): Float {
         val frameArea = (frameWidth * frameHeight).coerceAtLeast(1)
         return boundingBoxArea(rect).toFloat() / frameArea.toFloat()
@@ -500,9 +560,28 @@ class ObjectDetectionActivity : AppCompatActivity(), SensorEventListener {
 
     private fun proximityFromRatio(ratio: Float): ProximityLevel {
         return when {
-            ratio >= 0.28f -> ProximityLevel.NEAR
-            ratio >= 0.12f -> ProximityLevel.MEDIUM
+            ratio >= 0.20f -> ProximityLevel.NEAR
+            ratio >= 0.06f -> ProximityLevel.MEDIUM
             else -> ProximityLevel.FAR
+        }
+    }
+
+    private fun pathPositionFromBoundingBox(rect: Rect, frameWidth: Int): PathPosition {
+        val centerXRatio = rect.centerX().toFloat() / frameWidth.coerceAtLeast(1).toFloat()
+        return when {
+            centerXRatio < 0.36f -> PathPosition.LEFT
+            centerXRatio > 0.64f -> PathPosition.RIGHT
+            else -> PathPosition.CENTER
+        }
+    }
+
+    private fun applyPathPosition(label: String, pathPosition: PathPosition): String {
+        return when {
+            label.contains("frente") || label.contains("izquierda") || label.contains("derecha") -> label
+            pathPosition == PathPosition.CENTER -> "$label al frente"
+            pathPosition == PathPosition.LEFT -> "$label a la izquierda"
+            pathPosition == PathPosition.RIGHT -> "$label a la derecha"
+            else -> label
         }
     }
 
@@ -722,6 +801,12 @@ class ObjectDetectionActivity : AppCompatActivity(), SensorEventListener {
         HIGH(3)
     }
 
+    private enum class PathPosition {
+        LEFT,
+        CENTER,
+        RIGHT
+    }
+
     private enum class ProximityLevel(
         val statusLabel: String,
         val speechLabel: String,
@@ -737,11 +822,11 @@ class ObjectDetectionActivity : AppCompatActivity(), SensorEventListener {
 
         private const val TAG = "ObjectDetection"
         private const val REQUEST_CODE_PERMISSIONS = 10
-        private const val MIN_CONFIDENCE = 0.65f
-        private const val ANALYSIS_INTERVAL_MS = 750L
+        private const val MIN_LABEL_CONFIDENCE = 0.45f
+        private const val ANALYSIS_INTERVAL_MS = 350L
         private const val GENERAL_SPEAK_INTERVAL_MS = 6000L
-        private const val NOTICE_SPEAK_INTERVAL_MS = 4200L
-        private const val OBSTACLE_SPEAK_INTERVAL_MS = 2400L
+        private const val NOTICE_SPEAK_INTERVAL_MS = 3000L
+        private const val OBSTACLE_SPEAK_INTERVAL_MS = 1200L
         private const val PROXIMITY_SENSOR_ALERT_INTERVAL_MS = 2500L
         private const val VOICE_RETRY_DELAY_MS = 900L
         private const val VOICE_RESUME_DELAY_MS = 1000L
@@ -751,10 +836,17 @@ class ObjectDetectionActivity : AppCompatActivity(), SensorEventListener {
         private const val DISTANCE_CALIBRATION_FACTOR = 1.45f
         private const val MIN_ESTIMATED_DISTANCE_METERS = 0.3f
         private const val MAX_ESTIMATED_DISTANCE_METERS = 25f
+        private const val COLLISION_DISTANCE_METERS = 3.0f
         private val REQUIRED_PERMISSIONS = arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
 
         private val exactDescriptorMap = mapOf(
             "person" to DetectionDescriptor("persona", "una persona frente a ti", AlertLevel.HIGH, averageHeightMeters = 1.65f),
+            "people" to DetectionDescriptor("personas", "personas frente a ti", AlertLevel.HIGH, averageHeightMeters = 1.65f),
+            "human face" to DetectionDescriptor("persona", "una persona frente a ti", AlertLevel.HIGH, averageHeightMeters = 1.65f),
+            "face" to DetectionDescriptor("persona", "una persona frente a ti", AlertLevel.HIGH, averageHeightMeters = 1.65f),
+            "head" to DetectionDescriptor("persona", "una persona frente a ti", AlertLevel.HIGH, averageHeightMeters = 1.65f),
+            "portrait" to DetectionDescriptor("persona", "una persona frente a ti", AlertLevel.HIGH, averageHeightMeters = 1.65f),
+            "crowd" to DetectionDescriptor("personas", "personas frente a ti", AlertLevel.HIGH, averageHeightMeters = 1.65f),
             "fashion goods" to DetectionDescriptor("objeto personal", "un objeto en el camino", AlertLevel.MEDIUM, averageHeightMeters = 0.6f),
             "food" to DetectionDescriptor("objeto pequeno", "un objeto pequeno", AlertLevel.MEDIUM, averageHeightMeters = 0.25f),
             "home goods" to DetectionDescriptor("objeto del entorno", "un objeto del entorno", AlertLevel.MEDIUM),
@@ -800,7 +892,13 @@ class ObjectDetectionActivity : AppCompatActivity(), SensorEventListener {
         )
 
         private val keywordDescriptors = listOf(
-            DetectionDescriptor("persona", "una persona frente a ti", AlertLevel.HIGH, listOf("person", "people", "pedestrian"), 1.65f),
+            DetectionDescriptor(
+                "persona",
+                "una persona frente a ti",
+                AlertLevel.HIGH,
+                listOf("person", "people", "pedestrian", "human", "face", "head", "portrait", "crowd", "standing", "selfie"),
+                1.65f
+            ),
             DetectionDescriptor("vehiculo", "un vehiculo", AlertLevel.HIGH, listOf("vehicle", "car", "truck", "bus", "van"), 1.6f),
             DetectionDescriptor("bicicleta", "una bicicleta", AlertLevel.HIGH, listOf("bike", "bicycle", "cycl"), 1.1f),
             DetectionDescriptor("motocicleta", "una motocicleta", AlertLevel.HIGH, listOf("motorcycle", "scooter"), 1.25f),

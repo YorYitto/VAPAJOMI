@@ -4,95 +4,91 @@
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/vapajomi_background"
-    android:fillViewport="true"
+    android:background="#F5F5F5"
     tools:context=".MainActivity">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:gravity="center"
         android:orientation="vertical"
-        android:padding="28dp">
+        android:padding="32dp"
+        android:gravity="center">
+
+        <!-- Logo o Titulo -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="VAPAJOMI"
+            android:textSize="48sp"
+            android:textStyle="bold"
+            android:textColor="#02B126"
+            android:layout_marginTop="60dp"
+            android:layout_marginBottom="16dp"/>
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="48dp"
-            android:layout_marginBottom="16dp"
-            android:text="VAPAJOMI"
-            android:textColor="@color/vapajomi_primary"
-            android:textSize="48sp"
-            android:textStyle="bold" />
+            android:text="Asistente de Voz"
+            android:textSize="18sp"
+            android:textColor="#757575"
+            android:layout_marginBottom="60dp"/>
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="48dp"
-            android:gravity="center"
-            android:text="Asistente de voz para baja vision"
-            android:textColor="@color/vapajomi_text_secondary"
-            android:textSize="22sp"
-            android:textStyle="bold" />
-
+        <!-- Campo de Email -->
         <com.google.android.material.textfield.TextInputLayout
-            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="18dp"
-            android:hint="Correo electronico"
-            app:startIconDrawable="@android:drawable/ic_dialog_email">
+            android:hint="Correo Electronico"
+            app:startIconDrawable="@android:drawable/ic_dialog_email"
+            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
+            android:layout_marginBottom="16dp">
 
             <com.google.android.material.textfield.TextInputEditText
                 android:id="@+id/emailEditText"
                 android:layout_width="match_parent"
-                android:layout_height="64dp"
+                android:layout_height="wrap_content"
                 android:contentDescription="Correo electronico"
-                android:inputType="textEmailAddress"
-                android:textColor="@color/vapajomi_text"
-                android:textSize="20sp" />
+                android:inputType="textEmailAddress"/>
         </com.google.android.material.textfield.TextInputLayout>
 
+        <!-- Campo de Contrasena -->
         <com.google.android.material.textfield.TextInputLayout
-            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="28dp"
             android:hint="Contrasena"
+            app:startIconDrawable="@android:drawable/ic_lock_idle_lock"
             app:endIconMode="password_toggle"
-            app:startIconDrawable="@android:drawable/ic_lock_idle_lock">
+            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
+            android:layout_marginBottom="24dp">
 
             <com.google.android.material.textfield.TextInputEditText
                 android:id="@+id/passwordEditText"
                 android:layout_width="match_parent"
-                android:layout_height="64dp"
+                android:layout_height="wrap_content"
                 android:contentDescription="Contrasena"
-                android:inputType="textPassword"
-                android:textColor="@color/vapajomi_text"
-                android:textSize="20sp" />
+                android:inputType="textPassword"/>
         </com.google.android.material.textfield.TextInputLayout>
 
+        <!-- Boton de Iniciar Sesion -->
         <Button
             android:id="@+id/loginButton"
             android:layout_width="match_parent"
-            android:layout_height="72dp"
-            android:layout_marginBottom="16dp"
-            android:backgroundTint="@color/vapajomi_primary"
-            android:contentDescription="Iniciar sesion"
-            android:text="Iniciar sesion"
-            android:textColor="@color/black"
-            android:textSize="20sp"
-            android:textStyle="bold" />
+            android:layout_height="60dp"
+            android:text="Iniciar Sesion"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:backgroundTint="#02B126"
+            android:layout_marginBottom="16dp"/>
 
+        <!-- Boton de Registrarse -->
         <Button
             android:id="@+id/registerButton"
-            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
             android:layout_width="match_parent"
-            android:layout_height="72dp"
-            android:contentDescription="Crear cuenta nueva"
+            android:layout_height="60dp"
             android:text="Registrarse"
-            android:textColor="@color/vapajomi_primary"
-            android:textSize="20sp"
-            android:textStyle="bold" />
+            android:textSize="16sp"
+            android:textStyle="bold"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            android:textColor="#02B126"/>
+
     </LinearLayout>
 </ScrollView>

@@ -3,121 +3,116 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/vapajomi_background"
-    android:fillViewport="true">
+    android:background="#F5F5F5">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:gravity="center"
         android:orientation="vertical"
-        android:padding="28dp">
+        android:padding="32dp"
+        android:gravity="center">
 
+        <!-- Titulo -->
         <TextView
-            android:layout_width="match_parent"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="32dp"
-            android:layout_marginBottom="36dp"
-            android:gravity="center"
-            android:text="Crear cuenta"
-            android:textColor="@color/vapajomi_primary"
+            android:text="Crear Cuenta"
             android:textSize="36sp"
-            android:textStyle="bold" />
+            android:textStyle="bold"
+            android:textColor="#02B126"
+            android:layout_marginTop="40dp"
+            android:layout_marginBottom="40dp"/>
 
+        <!-- Campo de Nombre -->
         <com.google.android.material.textfield.TextInputLayout
-            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="16dp"
-            android:hint="Nombre completo"
-            app:startIconDrawable="@android:drawable/ic_menu_myplaces">
+            android:hint="Nombre Completo"
+            app:startIconDrawable="@android:drawable/ic_menu_myplaces"
+            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
+            android:layout_marginBottom="16dp">
 
             <com.google.android.material.textfield.TextInputEditText
                 android:id="@+id/nameEditText"
                 android:layout_width="match_parent"
-                android:layout_height="64dp"
+                android:layout_height="wrap_content"
                 android:contentDescription="Nombre completo"
-                android:inputType="textPersonName"
-                android:textColor="@color/vapajomi_text"
-                android:textSize="20sp" />
+                android:inputType="textPersonName"/>
         </com.google.android.material.textfield.TextInputLayout>
 
+        <!-- Campo de Email -->
         <com.google.android.material.textfield.TextInputLayout
-            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="16dp"
-            android:hint="Correo electronico"
-            app:startIconDrawable="@android:drawable/ic_dialog_email">
+            android:hint="Correo Electronico"
+            app:startIconDrawable="@android:drawable/ic_dialog_email"
+            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
+            android:layout_marginBottom="16dp">
 
             <com.google.android.material.textfield.TextInputEditText
                 android:id="@+id/emailEditText"
                 android:layout_width="match_parent"
-                android:layout_height="64dp"
+                android:layout_height="wrap_content"
                 android:contentDescription="Correo electronico"
-                android:inputType="textEmailAddress"
-                android:textColor="@color/vapajomi_text"
-                android:textSize="20sp" />
+                android:inputType="textEmailAddress"/>
         </com.google.android.material.textfield.TextInputLayout>
 
+        <!-- Campo de Contrasena -->
         <com.google.android.material.textfield.TextInputLayout
-            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="16dp"
             android:hint="Contrasena"
+            app:startIconDrawable="@android:drawable/ic_lock_idle_lock"
             app:endIconMode="password_toggle"
-            app:startIconDrawable="@android:drawable/ic_lock_idle_lock">
+            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
+            android:layout_marginBottom="16dp">
 
             <com.google.android.material.textfield.TextInputEditText
                 android:id="@+id/passwordEditText"
                 android:layout_width="match_parent"
-                android:layout_height="64dp"
+                android:layout_height="wrap_content"
                 android:contentDescription="Contrasena"
-                android:inputType="textPassword"
-                android:textColor="@color/vapajomi_text"
-                android:textSize="20sp" />
+                android:inputType="textPassword"/>
         </com.google.android.material.textfield.TextInputLayout>
 
+        <!-- Campo de Confirmar Contrasena -->
         <com.google.android.material.textfield.TextInputLayout
-            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="28dp"
-            android:hint="Confirmar contrasena"
+            android:hint="Confirmar Contrasena"
+            app:startIconDrawable="@android:drawable/ic_lock_idle_lock"
             app:endIconMode="password_toggle"
-            app:startIconDrawable="@android:drawable/ic_lock_idle_lock">
+            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
+            android:layout_marginBottom="24dp">
 
             <com.google.android.material.textfield.TextInputEditText
                 android:id="@+id/confirmPasswordEditText"
                 android:layout_width="match_parent"
-                android:layout_height="64dp"
+                android:layout_height="wrap_content"
                 android:contentDescription="Confirmar contrasena"
-                android:inputType="textPassword"
-                android:textColor="@color/vapajomi_text"
-                android:textSize="20sp" />
+                android:inputType="textPassword"/>
         </com.google.android.material.textfield.TextInputLayout>
 
+        <!-- Boton de Registrarse -->
         <Button
             android:id="@+id/registerButton"
             android:layout_width="match_parent"
-            android:layout_height="72dp"
-            android:layout_marginBottom="16dp"
-            android:backgroundTint="@color/vapajomi_primary"
-            android:contentDescription="Crear cuenta"
+            android:layout_height="60dp"
             android:text="Registrarse"
-            android:textColor="@color/black"
-            android:textSize="20sp"
-            android:textStyle="bold" />
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:backgroundTint="#02B126"
+            android:layout_marginBottom="16dp"/>
 
+        <!-- Boton de Volver al Login -->
         <Button
             android:id="@+id/backToLoginButton"
-            style="@style/Widget.MaterialComponents.Button.TextButton"
             android:layout_width="match_parent"
-            android:layout_height="72dp"
-            android:contentDescription="Volver al inicio de sesion"
+            android:layout_height="60dp"
             android:text="Ya tengo cuenta"
-            android:textColor="@color/vapajomi_primary"
-            android:textSize="20sp" />
+            android:textSize="16sp"
+            style="@style/Widget.MaterialComponents.Button.TextButton"
+            android:textColor="#02B126"/>
+
     </LinearLayout>
 </ScrollView>

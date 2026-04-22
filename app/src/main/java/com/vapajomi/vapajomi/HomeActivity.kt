@@ -57,9 +57,6 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private lateinit var welcomeText: TextView
     private lateinit var voiceResultText: TextView
-    private lateinit var detectButton: Button
-    private lateinit var helpButton: Button
-    private lateinit var emergencyButton: Button
     private lateinit var logoutButton: Button
     private lateinit var notificationManager: NotificationManager
     private lateinit var cameraManager: CameraManager
@@ -104,9 +101,6 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
         welcomeText = findViewById(R.id.welcomeText)
         voiceResultText = findViewById(R.id.voiceResultText)
-        detectButton = findViewById(R.id.detectButton)
-        helpButton = findViewById(R.id.helpButton)
-        emergencyButton = findViewById(R.id.emergencyButton)
         logoutButton = findViewById(R.id.logoutButton)
 
         voiceCommandListener = VoiceCommandListener(
@@ -149,22 +143,6 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
         logoutButton.setOnClickListener {
             logout()
-        }
-
-        detectButton.setOnClickListener {
-            vibratePattern(longArrayOf(0, 80))
-            openObjectDetection()
-        }
-
-        helpButton.setOnClickListener {
-            vibratePattern(longArrayOf(0, 60))
-            speakAvailableCommands()
-        }
-
-        emergencyButton.setOnClickListener {
-            vibratePattern(longArrayOf(0, 120, 80, 120))
-            speak("Abriendo llamada de emergencia de Bogota")
-            makePhoneCall(EMERGENCY_NUMBER)
         }
 
         checkAndRequestPermissions()
