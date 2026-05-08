@@ -35,7 +35,8 @@
             android:layout_height="wrap_content"
             android:text="Escaneando el entorno..."
             android:textColor="@android:color/white"
-            android:textSize="15sp" />
+            android:textSize="15sp"
+            android:importantForAccessibility="no" />
 
         <TextView
             android:id="@+id/statusText"
@@ -45,7 +46,8 @@
             android:text="Preparando camara..."
             android:textColor="@android:color/white"
             android:textSize="20sp"
-            android:textStyle="bold" />
+            android:textStyle="bold"
+            android:importantForAccessibility="no" />
     </LinearLayout>
 
     <LinearLayout

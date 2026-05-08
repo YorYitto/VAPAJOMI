@@ -58,6 +58,8 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private lateinit var welcomeText: TextView
     private lateinit var voiceResultText: TextView
     private lateinit var logoutButton: Button
+    private lateinit var registerVoiceButton: Button
+    private lateinit var deleteVoiceButton: Button
     private lateinit var notificationManager: NotificationManager
     private lateinit var cameraManager: CameraManager
     private lateinit var audioManager: AudioManager
@@ -70,6 +72,16 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var isAwaitingCommand = false
     private var shouldResumeWakeListeningAfterSpeech = false
     private val wakeWordVariants = setOf("activate", "activar", "activa", "activate por favor")
+    private lateinit var voiceProfileManager: VoiceProfileManager
+    private var pendingVoiceVerification = false
+    private var isSessionActive = false
+    private val sessionTimeoutMs = 120000L
+    private val sessionTimeoutRunnable = Runnable {
+        if (isSessionActive) {
+            isSessionActive = false
+            speak("Sesion terminada por inactividad. Di Activate para continuar.")
+        }
+    }
 
     private val permissionsRequestCode = 100
 
@@ -102,6 +114,10 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         welcomeText = findViewById(R.id.welcomeText)
         voiceResultText = findViewById(R.id.voiceResultText)
         logoutButton = findViewById(R.id.logoutButton)
+        registerVoiceButton = findViewById(R.id.registerVoiceButton)
+        deleteVoiceButton = findViewById(R.id.deleteVoiceButton)
+
+        voiceProfileManager = VoiceProfileManager(this)
 
         voiceCommandListener = VoiceCommandListener(
             context = this,
@@ -121,17 +137,30 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             override fun onStart(utteranceId: String?) = Unit
 
             override fun onDone(utteranceId: String?) {
-                if (shouldResumeWakeListeningAfterSpeech) {
+                if (pendingVoiceVerification) {
+                    pendingVoiceVerification = false
                     shouldResumeWakeListeningAfterSpeech = false
-                    mainHandler.postDelayed({ startWakeWordListening() }, 1200)
+                    startVoiceVerification()
+                } else if (shouldResumeWakeListeningAfterSpeech) {
+                    shouldResumeWakeListeningAfterSpeech = false
+                    if (isSessionActive) {
+                        mainHandler.postDelayed({ listenForActivatedCommand() }, 700)
+                    } else {
+                        mainHandler.postDelayed({ startWakeWordListening() }, 1000)
+                    }
                 }
             }
 
             @Deprecated("Deprecated in Java")
             override fun onError(utteranceId: String?) {
+                pendingVoiceVerification = false
                 if (shouldResumeWakeListeningAfterSpeech) {
                     shouldResumeWakeListeningAfterSpeech = false
-                    mainHandler.postDelayed({ startWakeWordListening() }, 1200)
+                    if (isSessionActive) {
+                        mainHandler.postDelayed({ listenForActivatedCommand() }, 700)
+                    } else {
+                        mainHandler.postDelayed({ startWakeWordListening() }, 1000)
+                    }
                 }
             }
         })
@@ -144,6 +173,16 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         logoutButton.setOnClickListener {
             logout()
         }
+
+        registerVoiceButton.setOnClickListener {
+            startActivity(Intent(this, VoiceProfileActivity::class.java))
+        }
+
+        deleteVoiceButton.setOnClickListener {
+            confirmDeleteVoiceProfile()
+        }
+
+        updateVoiceButtons()
 
         checkAndRequestPermissions()
     }
@@ -208,16 +247,25 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
         if (!isAwaitingCommand) {
             if (command in wakeWordVariants) {
-                voiceResultText.text = "Activado. Te escucho"
-                mainHandler.postDelayed({ listenForActivatedCommand() }, 300)
+                if (voiceProfileManager.isEnrolled()) {
+                    pendingVoiceVerification = true
+                    voiceResultText.text = "Verificando identidad..."
+                    speak("Di tu nombre o cualquier frase ahora.")
+                } else {
+                    isSessionActive = true
+                    resetSessionTimeout()
+                    voiceResultText.text = "Sesion activa. Di tu comando."
+                    speak("Sesion activa. Te escucho.")
+                }
             } else {
-                voiceResultText.text = "Esperando 'Activate'"
+                voiceResultText.text = "Esperando Activate"
                 mainHandler.postDelayed({ startWakeWordListening() }, 800)
             }
             return
         }
 
         isAwaitingCommand = false
+        resetSessionTimeout()
         voiceResultText.text = "Escuche: $text"
         handleVoiceCommand(text)
     }
@@ -226,36 +274,27 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         isWakeWordListening = false
 
         if (message == "No se detecto voz" || message == "No entendi lo que dijiste") {
-            voiceResultText.text = if (isAwaitingCommand) {
-                "No te entendi. Di tu comando nuevamente"
+            if (isSessionActive) {
+                voiceResultText.text = "No te escuche. Di tu comando."
+                mainHandler.postDelayed({ listenForActivatedCommand() }, 600)
             } else {
-                "Esperando 'Activate'"
+                voiceResultText.text = "Esperando Activate"
+                mainHandler.postDelayed({ startWakeWordListening() }, 800)
             }
-
-            mainHandler.postDelayed({
-                if (isAwaitingCommand) {
-                    listenForActivatedCommand()
-                } else {
-                    startWakeWordListening()
-                }
-            }, 800)
             return
         }
 
         if (message == "El reconocedor esta ocupado" || message == "Error interno del cliente") {
             mainHandler.postDelayed({
-                if (isAwaitingCommand) {
-                    listenForActivatedCommand()
-                } else {
-                    startWakeWordListening()
-                }
+                if (isSessionActive) listenForActivatedCommand() else startWakeWordListening()
             }, 1000)
             return
         }
 
         voiceResultText.text = message
-        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
-        mainHandler.postDelayed({ startWakeWordListening() }, 1500)
+        mainHandler.postDelayed({
+            if (isSessionActive) listenForActivatedCommand() else startWakeWordListening()
+        }, 1500)
     }
 
     private fun initTorch() {
@@ -372,10 +411,20 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 speak(voiceResultText.text.toString())
             }
 
+            command == "desactivar" || command == "cerrar asistente" || command == "apagar asistente" -> {
+                isSessionActive = false
+                mainHandler.removeCallbacks(sessionTimeoutRunnable)
+                tts.stop()
+                voiceResultText.text = "Asistente desactivado. Di Activate para continuar."
+                mainHandler.postDelayed({ startWakeWordListening() }, 600)
+            }
+
             command == "detener" || command == "callate" || command == "cancelar" -> {
                 tts.stop()
-                voiceResultText.text = "Audio detenido. Di Activate para continuar"
-                mainHandler.postDelayed({ startWakeWordListening() }, 600)
+                voiceResultText.text = if (isSessionActive) "Sesion activa. Di tu comando." else "Di Activate para comenzar."
+                mainHandler.postDelayed({
+                    if (isSessionActive) listenForActivatedCommand() else startWakeWordListening()
+                }, 600)
             }
 
             command.contains("enciende la linterna") ||
@@ -490,6 +539,30 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 sendSmsToTarget(smsCommand.first, smsCommand.second)
             }
 
+            command.contains("probar mi voz") ||
+                command.contains("testear voz") ||
+                command.contains("verificar mi voz") -> {
+                speak("Di cualquier frase para probar tu voz.")
+                pendingVoiceVerification = true
+            }
+
+            command.contains("registrar mi voz") ||
+                command.contains("registrar voz") ||
+                command.contains("configurar mi voz") ||
+                command.contains("perfil de voz") -> {
+                speak("Abriendo registro de voz del propietario")
+                mainHandler.postDelayed({
+                    startActivity(Intent(this, VoiceProfileActivity::class.java))
+                }, 1200)
+            }
+
+            command.contains("borrar mi voz") ||
+                command.contains("eliminar perfil de voz") ||
+                command.contains("borrar perfil de voz") -> {
+                voiceProfileManager.clearProfile()
+                speak("Perfil de voz eliminado. Ahora cualquier persona puede usar el asistente.")
+            }
+
             command.contains("abrir instagram") || command == "instagram" -> {
                 openAppByPackage("com.instagram.android", "Instagram")
             }
@@ -522,7 +595,8 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 "enviar mensaje a alguien, enviar whatsapp a alguien diciendo el mensaje, abrir Instagram, " +
                 "donde estoy, navegar a un destino, dirigete a un destino, guiame a un destino, " +
                 "dime que hay al frente mio, detectar obstaculos, abrir camara, abrir mapas, abrir WhatsApp, abrir ajustes, " +
-                "subir o bajar volumen, silencio, hora, fecha, bateria, emergencia en Bogota, repetir y detener."
+                "subir o bajar volumen, silencio, hora, fecha, bateria, emergencia, repetir y detener. " +
+                "Para seguridad puedes decir: registrar mi voz, o borrar perfil de voz."
         )
     }
 
@@ -983,6 +1057,61 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
 
+    private fun resetSessionTimeout() {
+        mainHandler.removeCallbacks(sessionTimeoutRunnable)
+        mainHandler.postDelayed(sessionTimeoutRunnable, sessionTimeoutMs)
+    }
+
+    private fun updateVoiceButtons() {
+        val enrolled = voiceProfileManager.isEnrolled()
+        deleteVoiceButton.isEnabled = enrolled
+        deleteVoiceButton.alpha = if (enrolled) 1f else 0.4f
+        registerVoiceButton.text = if (enrolled) "Actualizar mi voz" else "Registrar mi voz"
+    }
+
+    private fun confirmDeleteVoiceProfile() {
+        AlertDialog.Builder(this)
+            .setTitle("Eliminar perfil de voz")
+            .setMessage("Esto eliminara tu perfil de voz y cualquier persona podra usar el asistente hasta que registres una nueva voz. ¿Confirmas?")
+            .setPositiveButton("Eliminar") { _, _ ->
+                voiceProfileManager.clearProfile()
+                updateVoiceButtons()
+                speak("Perfil de voz eliminado. El asistente ahora acepta cualquier voz.")
+                Toast.makeText(this, "Perfil de voz eliminado", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun startVoiceVerification() {
+        voiceResultText.text = "Habla ahora para verificar tu identidad..."
+        Thread {
+            val audio = voiceProfileManager.recordAudioBlocking(3000L)
+            mainHandler.post {
+                if (audio == null) {
+                    speak("No pude acceder al microfono. Intenta nuevamente.")
+                    return@post
+                }
+                when (voiceProfileManager.verify(audio)) {
+                    VoiceProfileManager.VerificationResult.ACCEPTED -> {
+                        isSessionActive = true
+                        resetSessionTimeout()
+                        voiceResultText.text = "Identidad verificada. Di tu comando."
+                        shouldResumeWakeListeningAfterSpeech = false
+                        listenForActivatedCommand()
+                    }
+                    VoiceProfileManager.VerificationResult.REJECTED -> {
+                        speak("Voz no reconocida. Si eres el propietario, di Activate y registra tu voz nuevamente.")
+                    }
+                    VoiceProfileManager.VerificationResult.NOT_ENROLLED -> {
+                        shouldResumeWakeListeningAfterSpeech = false
+                        listenForActivatedCommand()
+                    }
+                }
+            }
+        }.start()
+    }
+
     private fun speak(text: String) {
         voiceCommandListener.stopListening()
         isWakeWordListening = false
@@ -1005,13 +1134,16 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     override fun onResume() {
         super.onResume()
         showReturnNotification()
+        updateVoiceButtons()
         if (!isAwaitingCommand && !tts.isSpeaking) {
             mainHandler.postDelayed({ startWakeWordListening() }, 600)
         }
     }
 
     override fun onDestroy() {
+        isSessionActive = false
         mainHandler.removeCallbacksAndMessages(null)
+        if (::voiceProfileManager.isInitialized) voiceProfileManager.stopRecording()
         voiceCommandListener.destroy()
 
         if (::tts.isInitialized) {

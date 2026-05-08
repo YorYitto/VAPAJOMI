@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\USUARIO\\\\OneDrive\\\\Documentos\\\\INFODEC\\\\VAPAJOMI\" -Recurse -Force)",
+      "Bash(Select-Object FullName, PSIsContainer)",
+      "Bash(ConvertTo-Csv -NoTypeInformation)",
+      "Bash(Write-Output)",
+      "Bash(.\\\\gradlew --stop)"
+    ]
+  }
+}

@@ -3,6 +3,11 @@ plugins {
     id("com.google.gms.google-services")
 }
 
+// Redirige la carpeta build fuera de OneDrive para evitar bloqueos de archivos
+layout.buildDirectory.set(
+    file("${System.getenv("LOCALAPPDATA")}/GradleBuilds/VAPAJOMI/app")
+)
+
 android {
     namespace = "com.vapajomi.vapajomi"
     compileSdk = 36

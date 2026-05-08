@@ -1,13 +1,13 @@
 {
   "project_info": {
-    "project_number": "54428749404",
-    "project_id": "vapajomi-asistente",
-    "storage_bucket": "vapajomi-asistente.firebasestorage.app"
+    "project_number": "206991034185",
+    "project_id": "vapajomi-asistente-3777c",
+    "storage_bucket": "vapajomi-asistente-3777c.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:54428749404:android:a166386bfdee8969e32099",
+        "mobilesdk_app_id": "1:206991034185:android:3d009231d6ce8ef78e3c98",
         "android_client_info": {
           "package_name": "com.vapajomi.vapajomi"
         }
@@ -15,7 +15,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyDv43UiSL1dkA4SboqBMBss2RkpzM3lTQs"
+          "current_key": "AIzaSyAZQKgfagK6NO0YEmS4A59wcvs-Vu122eY"
         }
       ],
       "services": {
