@@ -140,7 +140,7 @@ class ObjectDetectionActivity : AppCompatActivity(), SensorEventListener {
                             if (!isVoiceListening && !isFinishing && !isDestroyed) {
                                 startVoiceCommandListening()
                             }
-                        }, 400)
+                        }, 200)
                     }
 
                     @Deprecated("Deprecated in Java")
@@ -149,7 +149,7 @@ class ObjectDetectionActivity : AppCompatActivity(), SensorEventListener {
                             if (!isVoiceListening && !isFinishing && !isDestroyed) {
                                 startVoiceCommandListening()
                             }
-                        }, 400)
+                        }, 200)
                     }
                 })
                 speakOnce(
@@ -617,6 +617,11 @@ class ObjectDetectionActivity : AppCompatActivity(), SensorEventListener {
 
         lastSpokenKey = key
         lastSpokenAt = now
+        // Detener el micrófono mientras habla el TTS para evitar bucle de retroalimentación
+        if (::voiceCommandListener.isInitialized && isVoiceListening) {
+            voiceCommandListener.stopListening()
+            isVoiceListening = false
+        }
         tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, key)
     }
 
