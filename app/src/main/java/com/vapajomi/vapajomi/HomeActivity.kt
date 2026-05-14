@@ -75,13 +75,6 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private lateinit var voiceProfileManager: VoiceProfileManager
     private var pendingVoiceVerification = false
     private var isSessionActive = false
-    private val sessionTimeoutMs = 120000L
-    private val sessionTimeoutRunnable = Runnable {
-        if (isSessionActive) {
-            isSessionActive = false
-            speak("Sesion terminada por inactividad. Di Activate para continuar.")
-        }
-    }
 
     private val permissionsRequestCode = 100
 
@@ -253,9 +246,8 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     speak("Di tu nombre o cualquier frase ahora.")
                 } else {
                     isSessionActive = true
-                    resetSessionTimeout()
-                    voiceResultText.text = "Sesion activa. Di tu comando."
-                    speak("Sesion activa. Te escucho.")
+                    voiceResultText.text = "Di tu comando."
+                    speak("Di tu comando.")
                 }
             } else {
                 voiceResultText.text = "Esperando Activate"
@@ -265,7 +257,7 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
 
         isAwaitingCommand = false
-        resetSessionTimeout()
+        isSessionActive = false
         voiceResultText.text = "Escuche: $text"
         handleVoiceCommand(text)
     }
@@ -413,7 +405,6 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
             command == "desactivar" || command == "cerrar asistente" || command == "apagar asistente" -> {
                 isSessionActive = false
-                mainHandler.removeCallbacks(sessionTimeoutRunnable)
                 tts.stop()
                 voiceResultText.text = "Asistente desactivado. Di Activate para continuar."
                 mainHandler.postDelayed({ startWakeWordListening() }, 600)
@@ -1057,11 +1048,6 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    private fun resetSessionTimeout() {
-        mainHandler.removeCallbacks(sessionTimeoutRunnable)
-        mainHandler.postDelayed(sessionTimeoutRunnable, sessionTimeoutMs)
-    }
-
     private fun updateVoiceButtons() {
         val enrolled = voiceProfileManager.isEnrolled()
         deleteVoiceButton.isEnabled = enrolled
@@ -1095,7 +1081,6 @@ class HomeActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 when (voiceProfileManager.verify(audio)) {
                     VoiceProfileManager.VerificationResult.ACCEPTED -> {
                         isSessionActive = true
-                        resetSessionTimeout()
                         voiceResultText.text = "Identidad verificada. Di tu comando."
                         shouldResumeWakeListeningAfterSpeech = false
                         listenForActivatedCommand()

@@ -612,12 +612,11 @@ class ObjectDetectionActivity : AppCompatActivity(), SensorEventListener {
         val canRepeat = key != lastSpokenKey || now - lastSpokenAt >= minIntervalMs
         if (!canRepeat) return
 
-        val isHighAlert = key.startsWith("HIGH:")
-        if (tts.isSpeaking && !isHighAlert && now - lastSpokenAt < MIN_SPEAK_DURATION_MS) return
+        // Nunca interrumpir: esperar a que la frase actual termine completa
+        if (tts.isSpeaking) return
 
         lastSpokenKey = key
         lastSpokenAt = now
-        // Detener el micrófono mientras habla el TTS para evitar bucle de retroalimentación
         if (::voiceCommandListener.isInitialized && isVoiceListening) {
             voiceCommandListener.stopListening()
             isVoiceListening = false
@@ -680,12 +679,15 @@ class ObjectDetectionActivity : AppCompatActivity(), SensorEventListener {
 
         lastProximityAlertAt = now
         showStatus("ALERTA: objeto muy cerca del sensor de proximidad.")
-        speakOnce(
-            key = "proximity_sensor_near",
-            text = "Atencion. Hay algo muy cerca del telefono.",
-            minIntervalMs = PROXIMITY_SENSOR_ALERT_INTERVAL_MS
-        )
         vibratePattern(longArrayOf(0, 180, 80, 180, 80, 180))
+        if (::voiceCommandListener.isInitialized && isVoiceListening) {
+            voiceCommandListener.stopListening()
+            isVoiceListening = false
+        }
+        if (::tts.isInitialized) {
+            tts.stop()
+            tts.speak("Atencion. Hay algo muy cerca del telefono.", TextToSpeech.QUEUE_FLUSH, null, "proximity_sensor_near")
+        }
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
@@ -816,12 +818,11 @@ class ObjectDetectionActivity : AppCompatActivity(), SensorEventListener {
 
         private const val TAG = "ObjectDetection"
         private const val REQUEST_CODE_PERMISSIONS = 10
-        private const val MIN_LABEL_CONFIDENCE = 0.38f
-        private const val ANALYSIS_INTERVAL_MS = 400L
-        private const val GENERAL_SPEAK_INTERVAL_MS = 12000L
-        private const val NOTICE_SPEAK_INTERVAL_MS = 8000L
-        private const val OBSTACLE_SPEAK_INTERVAL_MS = 5000L
-        private const val MIN_SPEAK_DURATION_MS = 4500L
+        private const val MIN_LABEL_CONFIDENCE = 0.50f
+        private const val ANALYSIS_INTERVAL_MS = 600L
+        private const val GENERAL_SPEAK_INTERVAL_MS = 18000L
+        private const val NOTICE_SPEAK_INTERVAL_MS = 12000L
+        private const val OBSTACLE_SPEAK_INTERVAL_MS = 8000L
         private const val PROXIMITY_SENSOR_ALERT_INTERVAL_MS = 2500L
         private const val VOICE_RETRY_DELAY_MS = 900L
         private const val VOICE_RESUME_DELAY_MS = 1000L
